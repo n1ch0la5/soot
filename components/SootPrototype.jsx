@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useRef, useEffect, useCallback } from "react";
-import { drawStamp, drawStyledQr } from "./sootStamp";
+import { drawStamp, drawStyledQr, saveCanvasPng } from "./sootStamp";
 import { THEMES, THEME_KEY, loadTheme, hexA } from "./themes";
 import {
   CODEC,
@@ -13,7 +13,6 @@ import {
   writeSoundBlock,
   blobToSamples,
   makeDemoVoice,
-  resampleLinear,
   usedStrips,
 } from "../lib/sootVoiceCodec";
 
@@ -237,6 +236,35 @@ function drawScene(canvas, amps, styleId, progress, trim = [0, 1], COLORS = THEM
   }
 }
 
+/* 16-bit WAV blob URL from float samples. Playback goes through an <audio>
+   element rather than Web Audio: on iOS the ringer switch mutes Web Audio,
+   but media elements play through silent mode like any voice memo. */
+function samplesToWavUrl(samples, sr) {
+  const n = samples.length;
+  const buf = new ArrayBuffer(44 + n * 2);
+  const dv = new DataView(buf);
+  const ws = (o, s) => {
+    for (let i = 0; i < s.length; i++) dv.setUint8(o + i, s.charCodeAt(i));
+  };
+  ws(0, "RIFF");
+  dv.setUint32(4, 36 + n * 2, true);
+  ws(8, "WAVE");
+  ws(12, "fmt ");
+  dv.setUint32(16, 16, true);
+  dv.setUint16(20, 1, true);
+  dv.setUint16(22, 1, true);
+  dv.setUint32(24, sr, true);
+  dv.setUint32(28, sr * 2, true);
+  dv.setUint16(32, 2, true);
+  dv.setUint16(34, 16, true);
+  ws(36, "data");
+  dv.setUint32(40, n * 2, true);
+  for (let i = 0; i < n; i++) {
+    dv.setInt16(44 + i * 2, Math.max(-1, Math.min(1, samples[i])) * 32767, true);
+  }
+  return URL.createObjectURL(new Blob([buf], { type: "audio/wav" }));
+}
+
 const GRAIN =
   "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3C/filter%3E%3Crect width='160' height='160' filter='url(%23n)' opacity='0.5'/%3E%3C/svg%3E\")";
 
@@ -364,16 +392,14 @@ async function renderCard({ amps, styleId, caption, durationSec, dateStr, sound,
 }
 
 /* ---------- the voice code: a scannable badge for posters & flyers ----------
-   Transparent, monochrome dark ink — scans anywhere light, and designers
-   can invert it in one step for dark posters. Dot-style QR wearing the
-   message's own waveform; the voice is packed inside the QR's URL. */
+   Transparent, monochrome middle grey — equidistant from white and black, so
+   one asset reads on light AND dark posters with no inverting. The QR IS the
+   badge: the voice lives in its URL, and the message's own waveform sits in
+   the center knockout so nothing outside the square looks scannable. */
 async function renderVoiceCode({ amps, url }) {
-  const INK = "#1B130A";
+  const INK = "#7E7E7E";
   try {
-    await Promise.all([
-      document.fonts.load("italic 44px 'Instrument Serif'"),
-      document.fonts.load("22px 'Space Mono'"),
-    ]);
+    await document.fonts.load("22px 'Space Mono'");
   } catch (e) {}
 
   const S = 800;
@@ -382,24 +408,13 @@ async function renderVoiceCode({ amps, url }) {
   c.height = S;
   const ctx = c.getContext("2d");
 
-  // the message's own waveform across the top
-  ctx.save();
-  ctx.translate(70, 28);
-  ctx.strokeStyle = INK;
-  ctx.fillStyle = INK;
-  ctx.lineWidth = 3;
-  ctx.lineCap = "round";
-  ctx.lineJoin = "round";
-  drawStyle(ctx, S - 140, 104, amps, "trace");
-  ctx.restore();
-
-  // the recording itself, as a scannable code
-  drawStyledQr(ctx, 124, 168, 552, url, { fg: INK });
+  // the recording itself, as a scannable code, the waveform inside it
+  drawStyledQr(ctx, 90, 70, 620, url, { fg: INK, amps });
 
   ctx.fillStyle = hexA(INK, 0.72);
   ctx.textAlign = "center";
   ctx.font = "22px 'Space Mono', monospace";
-  ctx.fillText("scan to listen · soot", S / 2, 776);
+  ctx.fillText("scan to listen · soot", S / 2, 756);
 
   return c;
 }
@@ -436,14 +451,14 @@ export default function SootPrototype() {
   const recRef = useRef(null);
   const recBlobRef = useRef(null);
   const recBufRef = useRef(null); // decoded AudioBuffer of the recording
-  const composeCtxRef = useRef(null); // AudioContext playing the recording
-  const demoCtxRef = useRef(null); // AudioContext playing the demo
+  const audioElRef = useRef(null); // the one <audio> element doing playback
+  const audioUrlRef = useRef(null); // its blob URL, revoked on stop
+  const demoPcmRef = useRef(null); // demo message rendered offline, cached
   const rafRef = useRef(0);
   const recordingRef = useRef(false);
   const playTokenRef = useRef(0);
   const sentCanvasRef = useRef(null); // native-res card; decode reads its pixels
   const decodedRef = useRef(null); // cached {samples, sr} after first decode
-  const pcmCtxRef = useRef(null); // AudioContext playing decoded voice
   const fileInputRef = useRef(null);
 
   useEffect(() => {
@@ -484,7 +499,12 @@ export default function SootPrototype() {
       } catch (e) {
         if (!cancelled) {
           setLinkVoice(false);
-          setNote("Couldn't read the voice inside this link.");
+          // version mismatches etc. carry a friendlier explanation
+          setNote(
+            e && e.message && e.message.includes("version")
+              ? "This code was " + e.message + " — make a fresh one."
+              : "Couldn't read the voice inside this link."
+          );
         }
       }
       if (!cancelled) setDecoding(false);
@@ -518,7 +538,7 @@ export default function SootPrototype() {
 
   const startRecording = async () => {
     playTokenRef.current++;
-    stopComposeAudio();
+    stopMedia();
     setPlaying(false);
     setNote("");
     setProgress(0);
@@ -594,20 +614,39 @@ export default function SootPrototype() {
     rafRef.current = requestAnimationFrame(tick);
   };
 
-  const stopComposeAudio = () => {
-    if (composeCtxRef.current) {
+  const stopMedia = () => {
+    if (audioElRef.current) {
       try {
-        composeCtxRef.current.close();
+        audioElRef.current.pause();
       } catch (e) {}
-      composeCtxRef.current = null;
+      audioElRef.current = null;
     }
+    if (audioUrlRef.current) {
+      URL.revokeObjectURL(audioUrlRef.current);
+      audioUrlRef.current = null;
+    }
+  };
+
+  // all playback funnels through one <audio> element (plays in silent mode)
+  const playMedia = (samples, sr) => {
+    stopMedia();
+    const url = samplesToWavUrl(samples, sr);
+    audioUrlRef.current = url;
+    const el = new Audio(url);
+    audioElRef.current = el;
+    el.onended = () => {
+      if (audioElRef.current === el) stopMedia();
+    };
+    el.play().catch(() => {
+      setNote("Couldn't start audio here — tap again.");
+    });
   };
 
   const playRecording = async () => {
     const token = ++playTokenRef.current;
-    const ACtx = window.AudioContext || window.webkitAudioContext;
     if (!recBufRef.current) {
       try {
+        const ACtx = window.AudioContext || window.webkitAudioContext;
         const dctx = new ACtx();
         recBufRef.current = await dctx.decodeAudioData(await recBlobRef.current.arrayBuffer());
         dctx.close();
@@ -618,28 +657,15 @@ export default function SootPrototype() {
       if (playTokenRef.current !== token) return;
     }
     const buf = recBufRef.current;
-    const t0 = trim[0] * buf.duration;
-    const dur = Math.max(0.05, (trim[1] - trim[0]) * buf.duration);
-    stopComposeAudio();
-    try {
-      const actx = new ACtx();
-      composeCtxRef.current = actx;
-      const src = actx.createBufferSource();
-      src.buffer = buf;
-      src.connect(actx.destination);
-      src.start(0, t0, dur);
-      src.onended = () => {
-        if (composeCtxRef.current === actx) {
-          composeCtxRef.current = null;
-          try {
-            actx.close();
-          } catch (e) {}
-        }
-      };
-    } catch (e) {
-      setNote("Couldn't play the recording in this environment.");
-      return;
+    const a = Math.floor(trim[0] * buf.length);
+    const b = Math.max(a + 1, Math.ceil(trim[1] * buf.length));
+    const mono = new Float32Array(b - a);
+    for (let c = 0; c < buf.numberOfChannels; c++) {
+      const ch = buf.getChannelData(c);
+      for (let i = 0; i < mono.length; i++) mono[i] += ch[a + i] / buf.numberOfChannels;
     }
+    playMedia(mono, buf.sampleRate);
+    const dur = mono.length / buf.sampleRate;
     setPlaying(true);
     setProgress(trim[0]);
     // sweep the reveal across the kept region only
@@ -654,44 +680,43 @@ export default function SootPrototype() {
     rafRef.current = requestAnimationFrame(tick);
   };
 
-  const playDemo = () => {
+  const playDemo = async () => {
     const token = ++playTokenRef.current;
     setPlaying(true);
     setProgress(0);
     try {
-      const ACtx = window.AudioContext || window.webkitAudioContext;
-      const actx = new ACtx();
-      demoCtxRef.current = actx;
-      const len = Math.floor(actx.sampleRate * DEMO_DUR);
-      const buf = actx.createBuffer(1, len, actx.sampleRate);
-      const ch = buf.getChannelData(0);
-      for (let i = 0; i < len; i++) ch[i] = Math.random() * 2 - 1;
-      const src = actx.createBufferSource();
-      src.buffer = buf;
-      const band = actx.createBiquadFilter();
-      band.type = "bandpass";
-      band.Q.value = 1.4;
-      const gain = actx.createGain();
-      const now = actx.currentTime;
-      gain.gain.setValueAtTime(0.0001, now);
-      band.frequency.setValueAtTime(280, now);
-      for (let i = 0; i < DEMO_AMPS.length; i += 3) {
-        const t = now + (i / DEMO_AMPS.length) * DEMO_DUR;
-        gain.gain.linearRampToValueAtTime(0.0001 + DEMO_AMPS[i] * 0.4, t);
-        band.frequency.linearRampToValueAtTime(280 + DEMO_AMPS[i] * 360, t);
+      if (!demoPcmRef.current) {
+        // render the demo offline once, then it plays like any media
+        const sr = 44100;
+        const OAC = window.OfflineAudioContext || window.webkitOfflineAudioContext;
+        const len = Math.floor(sr * DEMO_DUR);
+        const octx = new OAC(1, len, sr);
+        const buf = octx.createBuffer(1, len, sr);
+        const ch = buf.getChannelData(0);
+        for (let i = 0; i < len; i++) ch[i] = Math.random() * 2 - 1;
+        const src = octx.createBufferSource();
+        src.buffer = buf;
+        const band = octx.createBiquadFilter();
+        band.type = "bandpass";
+        band.Q.value = 1.4;
+        const gain = octx.createGain();
+        gain.gain.setValueAtTime(0.0001, 0);
+        band.frequency.setValueAtTime(280, 0);
+        for (let i = 0; i < DEMO_AMPS.length; i += 3) {
+          const t = (i / DEMO_AMPS.length) * DEMO_DUR;
+          gain.gain.linearRampToValueAtTime(0.0001 + DEMO_AMPS[i] * 0.4, t);
+          band.frequency.linearRampToValueAtTime(280 + DEMO_AMPS[i] * 360, t);
+        }
+        gain.gain.linearRampToValueAtTime(0.0001, DEMO_DUR);
+        src.connect(band);
+        band.connect(gain);
+        gain.connect(octx.destination);
+        src.start(0);
+        const rendered = await octx.startRendering();
+        demoPcmRef.current = rendered.getChannelData(0).slice();
+        if (playTokenRef.current !== token) return;
       }
-      gain.gain.linearRampToValueAtTime(0.0001, now + DEMO_DUR);
-      src.connect(band);
-      band.connect(gain);
-      gain.connect(actx.destination);
-      src.start(now);
-      src.stop(now + DEMO_DUR + 0.05);
-      src.onended = () => {
-        if (demoCtxRef.current === actx) demoCtxRef.current = null;
-        try {
-          actx.close();
-        } catch (e) {}
-      };
+      playMedia(demoPcmRef.current, 44100);
     } catch (e) {}
     setDuration(DEMO_DUR);
     runProgressClock(DEMO_DUR, token);
@@ -705,7 +730,7 @@ export default function SootPrototype() {
 
   const resetToDemo = () => {
     playTokenRef.current++;
-    stopComposeAudio();
+    stopMedia();
     setPlaying(false);
     setHasRecording(false);
     recBlobRef.current = null;
@@ -792,26 +817,10 @@ export default function SootPrototype() {
     });
   };
 
-  const stopPcm = () => {
-    if (pcmCtxRef.current) {
-      try {
-        pcmCtxRef.current.close();
-      } catch (e) {}
-      pcmCtxRef.current = null;
-    }
-  };
-
   // one switch that silences every source, anywhere in the app
   const stopAllAudio = () => {
     playTokenRef.current++;
-    stopComposeAudio();
-    stopPcm();
-    if (demoCtxRef.current) {
-      try {
-        demoCtxRef.current.close();
-      } catch (e) {}
-      demoCtxRef.current = null;
-    }
+    stopMedia();
     setPlaying(false);
     setProgress(0);
   };
@@ -819,8 +828,7 @@ export default function SootPrototype() {
   const createIt = async () => {
     if (weaving) return;
     playTokenRef.current++;
-    stopComposeAudio();
-    stopPcm();
+    stopMedia();
     setPlaying(false);
     setProgress(0);
     setNote("");
@@ -862,36 +870,7 @@ export default function SootPrototype() {
     }
 
     const { samples, sr } = decodedRef.current;
-    stopPcm();
-    try {
-      const ACtx = window.AudioContext || window.webkitAudioContext;
-      const actx = new ACtx();
-      pcmCtxRef.current = actx;
-      let buf;
-      try {
-        buf = actx.createBuffer(1, samples.length, sr);
-        buf.copyToChannel(samples, 0);
-      } catch (e) {
-        const rs = resampleLinear(samples, sr, actx.sampleRate);
-        buf = actx.createBuffer(1, rs.length, actx.sampleRate);
-        buf.copyToChannel(rs, 0);
-      }
-      const src = actx.createBufferSource();
-      src.buffer = buf;
-      src.connect(actx.destination);
-      src.start();
-      src.onended = () => {
-        if (pcmCtxRef.current === actx) {
-          pcmCtxRef.current = null;
-          try {
-            actx.close();
-          } catch (e) {}
-        }
-      };
-    } catch (e) {
-      setNote("Couldn't play audio in this environment.");
-      return;
-    }
+    playMedia(samples, sr);
     setPlaying(true);
     setProgress(0);
     runProgressClock(samples.length / sr, token);
@@ -908,7 +887,7 @@ export default function SootPrototype() {
       c.getContext("2d").drawImage(img, 0, 0);
       URL.revokeObjectURL(url);
       playTokenRef.current++;
-      stopPcm();
+      stopMedia();
       sentCanvasRef.current = c;
       decodedRef.current = null;
       setSentImage(c.toDataURL("image/png"));
@@ -972,8 +951,7 @@ export default function SootPrototype() {
   /* ---------- navigation ---------- */
   const switchView = (v) => {
     playTokenRef.current++;
-    stopComposeAudio();
-    stopPcm();
+    stopMedia();
     setPlaying(false);
     setProgress(0);
     setRevealed(false);
@@ -982,7 +960,7 @@ export default function SootPrototype() {
   };
 
   const replyWithVoice = () => {
-    stopPcm();
+    stopMedia();
     resetToDemo();
     setCaption("");
     switchView("compose");
@@ -1018,8 +996,12 @@ export default function SootPrototype() {
       const payload = await encodeVoiceUrl(samples);
       const url = `${window.location.origin}/#v=${payload}`;
       const c = await renderVoiceCode({ amps: getTrimmedAmps(), url });
-      downloadCanvas(c, "soot-voice-code.png");
-      if ((hasRecording ? trimmedDur : duration) > 4) {
+      await saveCanvasPng(c, "soot-voice-code.png");
+      if (/^(localhost|127\.|192\.168\.|10\.)/.test(window.location.hostname)) {
+        setNote(
+          "heads up: this code points at your dev server — phones can't open it. Regenerate from the deployed site before sharing."
+        );
+      } else if ((hasRecording ? trimmedDur : duration) > 4) {
         setNote("tip: shorter sounds make denser codes prettier — try a tighter trim.");
       }
     } catch (e) {
@@ -1076,9 +1058,9 @@ export default function SootPrototype() {
         view !== "compose" && sentCanvasRef.current
           ? sentCanvasRef.current
           : await buildCard();
-      downloadCanvas(c);
+      await saveCanvasPng(c, "soot-message.png");
     } catch (e) {
-      setNote("Couldn't save the image in this environment.");
+      setNote("Couldn't save here — long-press the image and choose Save instead.");
     }
     setExporting(false);
   };

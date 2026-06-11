@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useEffect, useRef, useState } from "react";
-import { drawStamp, INK, IVORY } from "./sootStamp";
+import { drawStamp, saveCanvasPng, INK, IVORY } from "./sootStamp";
 import { THEMES, loadTheme } from "./themes";
 
 const BTN_TEXT = "#1B130A"; // text on the accent button, dark on every theme
@@ -34,16 +34,14 @@ export default function AboutSoot() {
     } catch (e) {}
   }, [C.ivory]);
 
-  // transparent PNG: pick the mark color for the paper it'll live on
-  const downloadStamp = (fg, name) => () => {
+  // transparent PNG: pick the mark color for the paper it'll live on.
+  // saveCanvasPng routes through the share sheet on mobile (→ Photos app)
+  const downloadStamp = (fg, name) => async () => {
     const c = document.createElement("canvas");
     renderStamp(c, link, fg);
-    const a = document.createElement("a");
-    a.href = c.toDataURL("image/png");
-    a.download = name;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
+    try {
+      await saveCanvasPng(c, name);
+    } catch (e) {}
   };
 
   const css = `

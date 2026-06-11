@@ -28,6 +28,33 @@ function makeStampAmps() {
 }
 const STAMP_AMPS = makeStampAmps();
 
+/* Save a canvas as PNG. On mobile this goes through the share sheet (the
+   only web route into the Photos app — "Save Image" lives there); desktop
+   falls back to a regular download. */
+export async function saveCanvasPng(canvas, name) {
+  const blob = await new Promise((res, rej) =>
+    canvas.toBlob((b) => (b ? res(b) : rej(new Error("toBlob failed"))), "image/png")
+  );
+  const file = new File([blob], name, { type: "image/png" });
+  if (navigator.canShare && navigator.canShare({ files: [file] })) {
+    try {
+      await navigator.share({ files: [file] });
+      return;
+    } catch (e) {
+      if (e && e.name === "AbortError") return; // user closed the sheet
+      // fall through to a plain download
+    }
+  }
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 4000);
+}
+
 function roundRectPath(ctx, x, y, w, h, r) {
   if (ctx.roundRect) ctx.roundRect(x, y, w, h, r);
   else ctx.rect(x, y, w, h);
@@ -36,7 +63,7 @@ function roundRectPath(ctx, x, y, w, h, r) {
 /* A QR drawn as soot: round dots for data, custom rounded "eyes" in the
    accent color, and (when the code is big enough) a small knockout in the
    middle wearing the wordmark — error correction absorbs the hole. */
-export function drawStyledQr(ctx, x, y, size, text, { fg = INK, accent } = {}) {
+export function drawStyledQr(ctx, x, y, size, text, { fg = INK, accent, amps } = {}) {
   let qr;
   try {
     qr = qrcode(0, "M");
@@ -86,12 +113,31 @@ export function drawStyledQr(ctx, x, y, size, text, { fg = INK, accent } = {}) {
   eye(n - 7, 0);
 
   if (holeR) {
-    ctx.fillStyle = fg;
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
-    ctx.font = `italic ${Math.round(holeR * cell * 1.15)}px 'Instrument Serif', Georgia, serif`;
-    ctx.fillText("S", mid * cell, (mid + 0.1) * cell);
-    ctx.textBaseline = "alphabetic";
+    if (amps && amps.length) {
+      // the message's own waveform lives in the knockout
+      const cw = holeR * cell * 1.5;
+      const chh = holeR * cell * 1.1;
+      ctx.strokeStyle = fg;
+      ctx.lineWidth = Math.max(1.5, cell * 0.3);
+      ctx.lineCap = "round";
+      ctx.beginPath();
+      const pts = 48;
+      for (let i = 0; i < pts; i++) {
+        const a = amps[Math.floor((i / pts) * amps.length)];
+        const px = mid * cell - cw / 2 + (i / (pts - 1)) * cw;
+        const py = mid * cell + (i % 2 === 0 ? -1 : 1) * a * (chh / 2);
+        if (i === 0) ctx.moveTo(px, py);
+        else ctx.lineTo(px, py);
+      }
+      ctx.stroke();
+    } else {
+      ctx.fillStyle = fg;
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.font = `italic ${Math.round(holeR * cell * 1.15)}px 'Instrument Serif', Georgia, serif`;
+      ctx.fillText("S", mid * cell, (mid + 0.1) * cell);
+      ctx.textBaseline = "alphabetic";
+    }
   }
   ctx.restore();
 }

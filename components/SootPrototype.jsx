@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState, useRef, useEffect, useCallback } from "react";
+import qrcode from "qrcode-generator";
 import {
   CODEC,
   LAYOUT,
@@ -10,6 +11,7 @@ import {
   blobToSamples,
   makeDemoVoice,
   resampleLinear,
+  usedStrips,
 } from "../lib/sootVoiceCodec";
 
 /* ────────────────────────────────────────────────────────────
@@ -296,7 +298,7 @@ function fmt(s) {
 }
 
 /* ---------- card renderer: the PNG that carries the voice ---------- */
-async function renderCard({ amps, styleId, caption, durationSec, dateStr, sound, palette }) {
+async function renderCard({ amps, styleId, caption, durationSec, dateStr, sound, palette, link }) {
   const COLORS = palette || THEMES.soot;
   try {
     await Promise.all([
@@ -379,15 +381,49 @@ async function renderCard({ amps, styleId, caption, durationSec, dateStr, sound,
   ctx.font = "28px 'Space Mono', monospace";
   ctx.fillText(fmt(durationSec) + " · " + dateStr, W / 2, caption ? 678 : 632);
 
-  // hint under the strips
+  // hint sits right under the last used strip — no orphaned gap
+  const lastStrip = LAYOUT.STRIP_Y[usedStrips(sound.frames) - 1];
   ctx.fillStyle = COLORS.textDim;
   ctx.font = "22px 'Space Mono', monospace";
-  ctx.fillText("the voice lives in these marks — decode with soot", W / 2, 1128);
+  ctx.fillText("the voice lives in these marks — decode with soot", W / 2, lastStrip + LAYOUT.STRIP_H + 48);
 
   // wordmark
   ctx.fillStyle = hexA(COLORS.ivory, 0.4);
   ctx.font = "italic 42px 'Instrument Serif', Georgia, serif";
   ctx.fillText("Soot", W / 2, H - 80);
+
+  // QR stamp in the corner — scan to open the decode page. Always a light
+  // sticker with dark modules: inverted QR codes scan unreliably.
+  if (link) {
+    try {
+      const qr = qrcode(0, "M");
+      qr.addData(link);
+      qr.make();
+      const n = qr.getModuleCount();
+      const cell = 4;
+      const pad = 12;
+      const size = n * cell + pad * 2;
+      const qx = W - 56 - size;
+      const qy = H - 56 - size;
+      ctx.fillStyle = "#F4ECDC";
+      ctx.beginPath();
+      if (ctx.roundRect) ctx.roundRect(qx, qy, size, size, 10);
+      else ctx.rect(qx, qy, size, size);
+      ctx.fill();
+      ctx.fillStyle = "#1B130A";
+      for (let r = 0; r < n; r++) {
+        for (let c = 0; c < n; c++) {
+          if (qr.isDark(r, c)) {
+            ctx.fillRect(qx + pad + c * cell, qy + pad + r * cell, cell, cell);
+          }
+        }
+      }
+      ctx.fillStyle = COLORS.textDim;
+      ctx.font = "18px 'Space Mono', monospace";
+      ctx.textAlign = "center";
+      ctx.fillText("scan to listen", qx + size / 2, qy - 14);
+    } catch (e) {}
+  }
 
   // the voice itself: header + spectrogram strips, written pixel-exact
   const id = ctx.getImageData(0, 0, W, H);
@@ -401,7 +437,8 @@ async function renderCard({ amps, styleId, caption, durationSec, dateStr, sound,
 export default function SootPrototype() {
   const [theme, setTheme] = useState("soot");
   const COLORS = THEMES[theme];
-  const [view, setView] = useState("compose"); // compose | received
+  const [view, setView] = useState("compose"); // compose | created | decode
+  const [cardOrigin, setCardOrigin] = useState("sent"); // sent | imported
   const [styleId, setStyleId] = useState("trace");
   const [amps, setAmps] = useState(DEMO_AMPS);
   const [hasRecording, setHasRecording] = useState(false);
@@ -450,12 +487,12 @@ export default function SootPrototype() {
   });
 
   useEffect(() => {
-    if (view === "received" && progress >= 1) setRevealed(true);
+    if (view !== "compose" && progress >= 1) setRevealed(true);
   }, [view, progress]);
 
   // shared links land on ?d — open straight into the decode view
   useEffect(() => {
-    if (new URLSearchParams(window.location.search).has("d")) setView("received");
+    if (new URLSearchParams(window.location.search).has("d")) setView("decode");
   }, []);
 
   useEffect(() => {
@@ -537,7 +574,7 @@ export default function SootPrototype() {
         setElapsed(el);
         setDuration(el);
         setAmps(resample(rawAmpsRef.current, N));
-        if (el >= 15) stopRecording();
+        if (el >= 7.5) stopRecording();
         else rafRef.current = requestAnimationFrame(poll);
       };
       rec.start();
@@ -732,14 +769,26 @@ export default function SootPrototype() {
   const buildCard = async () => {
     const samples = await getSamples();
     const sound = encodeVoice(samples);
+    // the card's waveform art shows only the kept slice of the recording
+    const cardAmps =
+      hasRecording && trimActive
+        ? resample(
+            amps.slice(
+              Math.floor(trim[0] * amps.length),
+              Math.max(Math.floor(trim[0] * amps.length) + 2, Math.ceil(trim[1] * amps.length))
+            ),
+            N
+          )
+        : amps;
     return renderCard({
-      amps,
+      amps: cardAmps,
       styleId,
       caption,
       durationSec: hasRecording ? trimmedDur : duration,
       dateStr,
       sound,
       palette: COLORS,
+      link: `${window.location.origin}/?d`,
     });
   };
 
@@ -752,7 +801,7 @@ export default function SootPrototype() {
     }
   };
 
-  const sendIt = async () => {
+  const createIt = async () => {
     if (weaving) return;
     playTokenRef.current++;
     stopComposeAudio();
@@ -767,7 +816,8 @@ export default function SootPrototype() {
       decodedRef.current = null;
       setSentImage(c.toDataURL("image/png"));
       setRevealed(false);
-      setView("received");
+      setCardOrigin("sent");
+      setView("created");
     } catch (e) {
       setNote("Couldn't weave the voice into an image here.");
     }
@@ -831,11 +881,8 @@ export default function SootPrototype() {
     runProgressClock(samples.length / sr, token);
   };
 
-  /* ---------- import a soot image ---------- */
-  const onImportFile = (e) => {
-    const file = e.target.files && e.target.files[0];
-    e.target.value = "";
-    if (!file) return;
+  /* ---------- import a soot image (file pick, paste, or drop) ---------- */
+  const importImage = (file) => {
     const url = URL.createObjectURL(file);
     const img = new Image();
     img.onload = () => {
@@ -853,7 +900,8 @@ export default function SootPrototype() {
       setPlaying(false);
       setProgress(0);
       setRevealed(false);
-      setView("received");
+      setCardOrigin("imported");
+      setView("decode");
     };
     img.onerror = () => {
       URL.revokeObjectURL(url);
@@ -862,21 +910,65 @@ export default function SootPrototype() {
     img.src = url;
   };
 
+  const onImportFile = (e) => {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = "";
+    if (file) importImage(file);
+  };
+
+  const pasteImage = async () => {
+    try {
+      const items = await navigator.clipboard.read();
+      for (const item of items) {
+        const t = item.types.find((x) => x.startsWith("image/"));
+        if (t) {
+          importImage(await item.getType(t));
+          return;
+        }
+      }
+      setNote("No image on the clipboard — copy the picture first.");
+    } catch (e) {
+      setNote("Couldn't read the clipboard here — choose the image instead.");
+    }
+  };
+
+  // ⌘V anywhere on the decode page works too
+  useEffect(() => {
+    if (view !== "decode") return;
+    const onPaste = (e) => {
+      const items = e.clipboardData ? e.clipboardData.items : [];
+      for (const it of items) {
+        if (it.type.startsWith("image/")) {
+          const f = it.getAsFile();
+          if (f) {
+            e.preventDefault();
+            importImage(f);
+            return;
+          }
+        }
+      }
+    };
+    window.addEventListener("paste", onPaste);
+    return () => window.removeEventListener("paste", onPaste);
+  });
+
   /* ---------- navigation ---------- */
-  const backToCompose = () => {
+  const switchView = (v) => {
     playTokenRef.current++;
     stopComposeAudio();
     stopPcm();
     setPlaying(false);
     setProgress(0);
-    setView("compose");
+    setRevealed(false);
+    setNote("");
+    setView(v);
   };
 
   const replyWithVoice = () => {
     stopPcm();
     resetToDemo();
     setCaption("");
-    setView("compose");
+    switchView("compose");
   };
 
   // Computed in an effect so server-rendered HTML matches the client on hydration.
@@ -906,7 +998,7 @@ export default function SootPrototype() {
     setNote("");
     try {
       const c =
-        view === "received" && sentCanvasRef.current
+        view !== "compose" && sentCanvasRef.current
           ? sentCanvasRef.current
           : await buildCard();
       const blob = await new Promise((res, rej) =>
@@ -914,7 +1006,7 @@ export default function SootPrototype() {
       );
       const file = new File([blob], "soot-message.png", { type: "image/png" });
       const link = `${window.location.origin}/?d`;
-      const text = `a voice hidden in a picture — save the image, then listen at ${link}`;
+      const text = `a voice hidden in a picture — copy or save the image, then hear it at ${link}`;
       if (navigator.canShare && navigator.canShare({ files: [file] })) {
         await navigator.share({ files: [file], text });
       } else if (navigator.share) {
@@ -944,7 +1036,7 @@ export default function SootPrototype() {
     setNote("");
     try {
       const c =
-        view === "received" && sentCanvasRef.current
+        view !== "compose" && sentCanvasRef.current
           ? sentCanvasRef.current
           : await buildCard();
       downloadCanvas(c);
@@ -963,9 +1055,22 @@ export default function SootPrototype() {
     .soot-root::before { content:''; position:fixed; inset:0; background-image:${GRAIN};
       opacity:0.05; pointer-events:none; mix-blend-mode:overlay; }
     .soot-wrap { width:100%; max-width:420px; }
+    .soot-banner { align-self:stretch; margin:-28px -18px 24px; padding:11px 18px;
+      text-align:center; font-family:'Space Mono',monospace; font-size:11px;
+      letter-spacing:0.08em; line-height:1.6; color:${COLORS.textDim}; text-decoration:none;
+      background:${hexA(COLORS.card, 0.6)}; border-bottom:1px solid ${COLORS.cardEdge};
+      transition:color .15s; }
+    .soot-banner span { color:${COLORS.ember}; }
+    .soot-banner:hover { color:${COLORS.ivory}; }
     .soot-mark { font-family:'Instrument Serif',serif; font-style:italic; font-size:30px; }
     .soot-tag { color:${COLORS.textDim}; font-size:13px; margin-top:2px; letter-spacing:0.04em; }
     .soot-themes { display:flex; gap:8px; padding-top:8px; }
+    .soot-tabs { display:flex; gap:8px; justify-content:center; margin-top:20px; }
+    .soot-tab { padding:8px 26px; border-radius:999px; border:1px solid ${COLORS.cardEdge};
+      background:transparent; color:${COLORS.textDim}; font-family:inherit; font-size:14px;
+      font-weight:500; cursor:pointer; transition:color .15s,border-color .15s; }
+    .soot-tab[aria-selected="true"] { color:${COLORS.ivory}; border-color:${COLORS.ember}; }
+    .soot-tab:focus-visible { outline:2px solid ${COLORS.ember}; outline-offset:2px; }
     .soot-swatch { width:22px; height:22px; border-radius:7px; border:1.5px solid; cursor:pointer; padding:0; }
     .soot-swatch[aria-pressed="true"] { transform:scale(1.12); }
     .soot-swatch:focus-visible { outline:2px solid ${COLORS.ember}; outline-offset:2px; }
@@ -1006,8 +1111,10 @@ export default function SootPrototype() {
       text-align:center; margin-top:6px; letter-spacing:0.06em; }
     .soot-hint { position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
       font-family:'Space Mono',monospace; font-size:12px; letter-spacing:0.18em;
-      text-transform:uppercase; color:${COLORS.ember}; background:rgba(19,15,11,0.55);
+      text-transform:uppercase; color:${COLORS.ember}; background:${hexA(COLORS.page, 0.45)};
       backdrop-filter: blur(1px); }
+    .soot-hint span { background:${COLORS.page}; border:1px solid ${COLORS.cardEdge};
+      padding:10px 20px; border-radius:999px; box-shadow:0 6px 24px rgba(0,0,0,0.35); }
     .soot-cardbtn { display:block; width:100%; background:none; border:none; padding:0;
       cursor:pointer; font:inherit; color:inherit; text-align:inherit; }
     .soot-chips { display:flex; gap:8px; justify-content:center; margin-top:20px; flex-wrap:wrap; }
@@ -1052,17 +1159,75 @@ export default function SootPrototype() {
     .soot-back { margin-top:34px; text-align:center; }
   `;
 
-  /* ════════ RECEIVED VIEW ════════ */
-  if (view === "received") {
+  /* ════════ shared banner + header + tabs ════════ */
+  const storyBanner = (
+    <a className="soot-banner" href="/about">
+      in 1860 a voice was drawn in soot. it waited 148 years to be heard <span>· the story</span>
+    </a>
+  );
+
+  const headerAndTabs = (
+    <>
+      <header style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between" }}>
+        <div>
+          <div className="soot-mark">Soot</div>
+          <div className="soot-tag">paper that talks</div>
+        </div>
+        <div className="soot-themes" role="group" aria-label="Theme">
+          {Object.entries(THEMES).map(([id, t]) => (
+            <button
+              key={id}
+              className="soot-swatch"
+              aria-pressed={theme === id}
+              aria-label={`${t.label} theme`}
+              title={t.label}
+              style={{
+                background: `linear-gradient(135deg, ${t.page} 50%, ${t.ember} 50%)`,
+                borderColor: theme === id ? COLORS.ember : COLORS.cardEdge,
+              }}
+              onClick={() => setTheme(id)}
+            />
+          ))}
+        </div>
+      </header>
+      <div className="soot-tabs" role="tablist" aria-label="Mode">
+        <button
+          className="soot-tab"
+          role="tab"
+          aria-selected={view !== "decode"}
+          onClick={() => view !== "compose" && switchView("compose")}
+        >
+          create
+        </button>
+        <button
+          className="soot-tab"
+          role="tab"
+          aria-selected={view === "decode"}
+          onClick={() => view !== "decode" && switchView("decode")}
+        >
+          decode
+        </button>
+      </div>
+    </>
+  );
+
+  /* ════════ CREATED + DECODE VIEWS ════════ */
+  if (view === "created" || view === "decode") {
+    const showCard = !!sentImage && (view === "created" || cardOrigin === "imported");
     return (
       <div className="soot-root">
         <style>{css}</style>
+        {storyBanner}
         <div className="soot-wrap">
-          <div style={{ marginTop: 26 }}>
-            <div className="soot-eyebrow">a sound-image for you</div>
+          {headerAndTabs}
+
+          <div style={{ marginTop: 22 }}>
+            <div className="soot-eyebrow">
+              {view === "created" ? "your sound-image is ready" : "a sound-image for you"}
+            </div>
           </div>
 
-          {sentImage ? (
+          {showCard ? (
             <button
               className="soot-cardbtn"
               onClick={playReceived}
@@ -1079,43 +1244,69 @@ export default function SootPrototype() {
                 {playing && (
                   <div className="soot-progressbar" style={{ width: `${progress * 100}%` }} />
                 )}
-                {decoding && <div className="soot-hint">developing the voice…</div>}
+                {decoding && (
+                  <div className="soot-hint">
+                    <span>developing the voice…</span>
+                  </div>
+                )}
                 {!playing && !revealed && !decoding && (
-                  <div className="soot-hint">tap to listen</div>
+                  <div className="soot-hint">
+                    <span>{view === "created" ? "tap to hear how it arrives" : "tap to listen"}</span>
+                  </div>
                 )}
               </div>
             </button>
           ) : (
-            <div className="soot-card arrive" style={{ textAlign: "center", padding: "44px 24px" }}>
-              <div className="soot-eyebrow">someone sent you a talking picture</div>
-              <div style={{ marginTop: 22 }}>
+            <div
+              className="soot-card arrive"
+              style={{ textAlign: "center", padding: "44px 24px" }}
+              onDragOver={(e) => e.preventDefault()}
+              onDrop={(e) => {
+                e.preventDefault();
+                const f = e.dataTransfer.files && e.dataTransfer.files[0];
+                if (f) importImage(f);
+              }}
+            >
+              <div className="soot-eyebrow">got a talking picture?</div>
+              <div className="soot-actions" style={{ marginTop: 22 }}>
                 <button className="soot-primary" onClick={() => fileInputRef.current?.click()}>
                   Choose the image
                 </button>
+                <button className="soot-link" onClick={pasteImage}>
+                  or paste it here
+                </button>
               </div>
               <div className="soot-fine">
-                save the picture from your message first,
+                copy or save the picture from your message,
                 <br />
-                then pick it here and it will speak
+                then paste or pick it — and it will speak
               </div>
             </div>
           )}
 
-          {sentImage && (
+          {showCard && (
             <div className="soot-fine">
               no audio file here — the voice is read back from the picture's marks
             </div>
           )}
 
-          {sentImage && !revealed && !playing && !decoding && (
+          {view === "created" && showCard && (
             <div className="soot-actions">
               <button className="soot-primary" onClick={shareIt} disabled={sharing}>
                 {sharing ? "opening share…" : "Text it to someone"}
               </button>
+              <div className="soot-row">
+                <button className="soot-link" onClick={exportCard} disabled={exporting}>
+                  {exporting ? "saving…" : "save the image"}
+                </button>
+                <button className="soot-link" onClick={() => switchView("compose")}>
+                  back to editing
+                </button>
+              </div>
             </div>
           )}
 
-          {revealed && !playing && (
+          {view === "decode" && showCard && revealed && !playing && (
             <div className="soot-actions">
               <button className="soot-primary" onClick={replyWithVoice}>
                 Reply with your voice
@@ -1123,9 +1314,6 @@ export default function SootPrototype() {
               <div className="soot-row">
                 <button className="soot-link" onClick={playReceived}>
                   play again
-                </button>
-                <button className="soot-link" onClick={shareIt} disabled={sharing}>
-                  {sharing ? "sharing…" : "text it to someone"}
                 </button>
                 <button className="soot-link" onClick={exportCard} disabled={exporting}>
                   {exporting ? "saving…" : "save the image"}
@@ -1138,12 +1326,6 @@ export default function SootPrototype() {
           )}
 
           {note && <div className="soot-note">{note}</div>}
-
-          <div className="soot-back">
-            <button className="soot-link" onClick={backToCompose}>
-              ← back to compose (prototype)
-            </button>
-          </div>
         </div>
         <input
           ref={fileInputRef}
@@ -1160,29 +1342,9 @@ export default function SootPrototype() {
   return (
     <div className="soot-root">
       <style>{css}</style>
+      {storyBanner}
       <div className="soot-wrap">
-        <header style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between" }}>
-          <div>
-            <div className="soot-mark">Soot</div>
-            <div className="soot-tag">paper that talks</div>
-          </div>
-          <div className="soot-themes" role="group" aria-label="Theme">
-            {Object.entries(THEMES).map(([id, t]) => (
-              <button
-                key={id}
-                className="soot-swatch"
-                aria-pressed={theme === id}
-                aria-label={`${t.label} theme`}
-                title={t.label}
-                style={{
-                  background: `linear-gradient(135deg, ${t.page} 50%, ${t.ember} 50%)`,
-                  borderColor: theme === id ? COLORS.ember : COLORS.cardEdge,
-                }}
-                onClick={() => setTheme(id)}
-              />
-            ))}
-          </div>
-        </header>
+        {headerAndTabs}
 
         <div className="soot-card">
           <canvas ref={canvasRef} className="soot-canvas" aria-label="Sound wave trace" />
@@ -1296,7 +1458,7 @@ export default function SootPrototype() {
                   <rect x="6" y="6" width="12" height="12" rx="2" />
                 </svg>
               </button>
-              <div className="soot-btnlabel">listening… tap to stop (15s max)</div>
+              <div className="soot-btnlabel">listening… tap to stop (7.5s max)</div>
             </>
           )}
         </div>
@@ -1312,24 +1474,11 @@ export default function SootPrototype() {
 
         {!recording && (
           <div className="soot-send">
-            <button className="soot-primary" onClick={sendIt} disabled={weaving}>
-              {weaving ? "weaving the voice in…" : "Send it"}
+            <button className="soot-primary" onClick={createIt} disabled={weaving}>
+              {weaving ? "weaving the voice in…" : "Create the sound-image"}
             </button>
             <div className="soot-fine">
-              the picture itself carries the voice — send the PNG,
-              <br />
-              and soot reads it back out loud
-            </div>
-            <div className="soot-row" style={{ flexWrap: "wrap", justifyContent: "center" }}>
-              <button className="soot-link" onClick={shareIt} disabled={sharing}>
-                {sharing ? "sharing…" : "text it to someone"}
-              </button>
-              <button className="soot-link" onClick={exportCard} disabled={exporting}>
-                {exporting ? "saving…" : "save the sound-image"}
-              </button>
-              <button className="soot-link" onClick={() => fileInputRef.current?.click()}>
-                got a soot image? decode it
-              </button>
+              your voice becomes a picture — share or save it on the next step
             </div>
           </div>
         )}

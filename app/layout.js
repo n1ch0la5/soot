@@ -5,11 +5,11 @@ const siteUrl = process.env.URL || "http://localhost:3001";
 
 export const metadata = {
   metadataBase: new URL(siteUrl),
-  title: "Soot — paper that talks",
+  title: "Soot — paper talks",
   description:
     "A voice hidden in a picture. Record a message, send the image, and Soot reads it back out loud.",
   openGraph: {
-    title: "Soot — paper that talks",
+    title: "Soot — paper talks",
     description:
       "Someone sent you a talking picture. Save the image from your message, pick it here, and it will speak.",
     type: "website",
@@ -17,7 +17,7 @@ export const metadata = {
   },
   twitter: {
     card: "summary_large_image",
-    title: "Soot — paper that talks",
+    title: "Soot — paper talks",
     description:
       "A voice hidden in a picture. Save the image, pick it here, and it will speak.",
     images: ["/og.png"],

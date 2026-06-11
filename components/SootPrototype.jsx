@@ -18,7 +18,7 @@ import {
 } from "../lib/sootVoiceCodec";
 
 /* ────────────────────────────────────────────────────────────
-   SOOT — paper that talks
+   SOOT — paper talks
    Compose: record → style → caption.
    Send: weaves the voice into the picture itself — a visible
    spectrogram painted on the card. Only the PNG travels.
@@ -437,6 +437,7 @@ export default function SootPrototype() {
   const recBlobRef = useRef(null);
   const recBufRef = useRef(null); // decoded AudioBuffer of the recording
   const composeCtxRef = useRef(null); // AudioContext playing the recording
+  const demoCtxRef = useRef(null); // AudioContext playing the demo
   const rafRef = useRef(0);
   const recordingRef = useRef(false);
   const playTokenRef = useRef(0);
@@ -660,6 +661,7 @@ export default function SootPrototype() {
     try {
       const ACtx = window.AudioContext || window.webkitAudioContext;
       const actx = new ACtx();
+      demoCtxRef.current = actx;
       const len = Math.floor(actx.sampleRate * DEMO_DUR);
       const buf = actx.createBuffer(1, len, actx.sampleRate);
       const ch = buf.getChannelData(0);
@@ -684,7 +686,12 @@ export default function SootPrototype() {
       gain.connect(actx.destination);
       src.start(now);
       src.stop(now + DEMO_DUR + 0.05);
-      src.onended = () => actx.close();
+      src.onended = () => {
+        if (demoCtxRef.current === actx) demoCtxRef.current = null;
+        try {
+          actx.close();
+        } catch (e) {}
+      };
     } catch (e) {}
     setDuration(DEMO_DUR);
     runProgressClock(DEMO_DUR, token);
@@ -792,6 +799,21 @@ export default function SootPrototype() {
       } catch (e) {}
       pcmCtxRef.current = null;
     }
+  };
+
+  // one switch that silences every source, anywhere in the app
+  const stopAllAudio = () => {
+    playTokenRef.current++;
+    stopComposeAudio();
+    stopPcm();
+    if (demoCtxRef.current) {
+      try {
+        demoCtxRef.current.close();
+      } catch (e) {}
+      demoCtxRef.current = null;
+    }
+    setPlaying(false);
+    setProgress(0);
   };
 
   const createIt = async () => {
@@ -1120,6 +1142,10 @@ export default function SootPrototype() {
     .soot-trimhandle:focus-visible { outline:2px solid var(--s-accent); outline-offset:2px; }
     .soot-cardimg { width:100%; display:block; }
     .soot-progressbar { position:absolute; left:0; bottom:0; height:2px; background:var(--s-accent); }
+    .soot-stophint { position:absolute; bottom:12px; left:50%; transform:translateX(-50%);
+      font-family:'Space Mono',monospace; font-size:11px; letter-spacing:0.16em;
+      text-transform:uppercase; color:var(--s-accent); background:var(--s-page);
+      border:1px solid var(--s-edge); padding:6px 14px; border-radius:999px; pointer-events:none; }
     .soot-caption { font-family:'Instrument Serif',serif; font-style:italic; font-size:19px;
       text-align:center; margin-top:14px; min-height:24px; color:var(--s-fg); }
     .soot-meta { font-family:'Space Mono',monospace; font-size:11px; color:var(--s-text-dim);
@@ -1186,7 +1212,7 @@ export default function SootPrototype() {
       <header style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between" }}>
         <div>
           <div className="soot-mark">Soot</div>
-          <div className="soot-tag">paper that talks</div>
+          <div className="soot-tag">paper talks</div>
         </div>
         <div className="soot-themes" role="group" aria-label="Theme">
           {Object.entries(THEMES).map(([id, t]) => (
@@ -1245,9 +1271,13 @@ export default function SootPrototype() {
           {showCard ? (
             <button
               className="soot-cardbtn"
-              onClick={playReceived}
+              onClick={() => (playing ? stopAllAudio() : playReceived())}
               aria-label={
-                revealed ? "Play the message again" : "Tap to decode and listen to the message"
+                playing
+                  ? "Stop playback"
+                  : revealed
+                    ? "Play the message again"
+                    : "Tap to decode and listen to the message"
               }
             >
               <div className={`soot-card arrive ${playing ? "glow" : ""}`} style={{ padding: 0 }}>
@@ -1257,7 +1287,10 @@ export default function SootPrototype() {
                   alt="A Soot card whose markings carry the voice message"
                 />
                 {playing && (
-                  <div className="soot-progressbar" style={{ width: `${progress * 100}%` }} />
+                  <>
+                    <div className="soot-progressbar" style={{ width: `${progress * 100}%` }} />
+                    <div className="soot-stophint">tap to stop</div>
+                  </>
                 )}
                 {decoding && (
                   <div className="soot-hint">
@@ -1278,8 +1311,11 @@ export default function SootPrototype() {
               </div>
               {!decoding && (
                 <div className="soot-actions" style={{ marginTop: 22 }}>
-                  <button className="soot-primary" onClick={playReceived} disabled={playing}>
-                    {playing ? "listening…" : revealed ? "Play it again" : "Play the voice"}
+                  <button
+                    className="soot-primary"
+                    onClick={playing ? stopAllAudio : playReceived}
+                  >
+                    {playing ? "Stop" : revealed ? "Play it again" : "Play the voice"}
                   </button>
                   {revealed && !playing && (
                     <button className="soot-link" onClick={replyWithVoice}>
@@ -1455,13 +1491,24 @@ export default function SootPrototype() {
               <div className="soot-row">
                 <button
                   className="soot-btn"
-                  onClick={handlePlay}
-                  disabled={playing}
-                  aria-label={hasRecording ? "Play recording" : "Play demo message"}
+                  onClick={playing ? stopAllAudio : handlePlay}
+                  aria-label={
+                    playing
+                      ? "Stop playback"
+                      : hasRecording
+                        ? "Play recording"
+                        : "Play demo message"
+                  }
                 >
-                  <svg width="26" height="26" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-                    <path d="M8 5.5v13l11-6.5-11-6.5z" />
-                  </svg>
+                  {playing ? (
+                    <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                      <rect x="6" y="6" width="12" height="12" rx="2" />
+                    </svg>
+                  ) : (
+                    <svg width="26" height="26" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                      <path d="M8 5.5v13l11-6.5-11-6.5z" />
+                    </svg>
+                  )}
                 </button>
                 <button
                   className="soot-btn"

@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useEffect, useRef, useState } from "react";
-import qrcode from "qrcode-generator";
+import { drawStamp, INK, IVORY } from "./sootStamp";
 
 /* The about page keeps the original soot palette regardless of app theme.
    It's a story about lampblack, after all. */
@@ -15,75 +15,11 @@ const C = {
   ink: "#1B130A",
 };
 
-/* ---------- the Soot stamp: QR ringed by a waveform, for flyers ---------- */
-function makeStampAmps() {
-  let seed = 11;
-  const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
-  const out = [];
-  for (let i = 0; i < 220; i++) {
-    const t = i / 220;
-    const syllable = Math.abs(Math.sin(t * Math.PI * 7));
-    out.push(0.15 + 0.85 * syllable * (0.5 + 0.5 * rnd()));
-  }
-  return out;
-}
-
-function drawStamp(canvas, link) {
+function renderStamp(canvas, link, fg) {
   const S = 800;
   canvas.width = S;
   canvas.height = S;
-  const ctx = canvas.getContext("2d");
-
-  // cream sticker
-  ctx.fillStyle = C.ivory;
-  ctx.beginPath();
-  if (ctx.roundRect) ctx.roundRect(0, 0, S, S, 56);
-  else ctx.rect(0, 0, S, S);
-  ctx.fill();
-
-  // waveform ring around the center
-  const amps = makeStampAmps();
-  const cx = S / 2;
-  const cy = S / 2 - 30;
-  const base = 226;
-  ctx.strokeStyle = C.ink;
-  ctx.lineWidth = 3.4;
-  ctx.lineCap = "round";
-  ctx.beginPath();
-  for (let i = 0; i < amps.length; i++) {
-    const ang = -Math.PI / 2 + (i / amps.length) * Math.PI * 2;
-    const len = amps[i] * 64;
-    const r0 = base - len * 0.3;
-    const r1 = base + len * 0.7;
-    ctx.moveTo(cx + Math.cos(ang) * r0, cy + Math.sin(ang) * r0);
-    ctx.lineTo(cx + Math.cos(ang) * r1, cy + Math.sin(ang) * r1);
-  }
-  ctx.stroke();
-
-  // QR in the middle
-  const qr = qrcode(0, "M");
-  qr.addData(link);
-  qr.make();
-  const n = qr.getModuleCount();
-  const cell = Math.floor(290 / n);
-  const qsize = n * cell;
-  const qx = cx - qsize / 2;
-  const qy = cy - qsize / 2;
-  ctx.fillStyle = C.ink;
-  for (let r = 0; r < n; r++) {
-    for (let c = 0; c < n; c++) {
-      if (qr.isDark(r, c)) ctx.fillRect(qx + c * cell, qy + r * cell, cell, cell);
-    }
-  }
-
-  // wordmark + tag
-  ctx.fillStyle = C.ink;
-  ctx.textAlign = "center";
-  ctx.font = "italic 60px 'Instrument Serif', Georgia, serif";
-  ctx.fillText("Soot", cx, S - 110);
-  ctx.fillStyle = "rgba(27,19,10,0.65)";
-  ctx.font = "22px 'Space Mono', monospace";
-  ctx.fillText("a voice hidden in a picture", cx, S - 64);
+  drawStamp(canvas.getContext("2d"), 0, 0, S, link, { wordmark: true, fg });
 }
 
 export default function AboutSoot() {
@@ -93,19 +29,20 @@ export default function AboutSoot() {
   useEffect(() => {
     const l = `${window.location.origin}/?d`;
     setLink(l);
-    const draw = () => stampRef.current && drawStamp(stampRef.current, l);
+    const draw = () => stampRef.current && renderStamp(stampRef.current, l, IVORY);
     draw();
     try {
       document.fonts.ready.then(draw); // redraw once the serif arrives
     } catch (e) {}
   }, []);
 
-  const downloadStamp = () => {
-    const c = stampRef.current;
-    if (!c) return;
+  // transparent PNG: pick the mark color for the paper it'll live on
+  const downloadStamp = (fg, name) => () => {
+    const c = document.createElement("canvas");
+    renderStamp(c, link, fg);
     const a = document.createElement("a");
     a.href = c.toDataURL("image/png");
-    a.download = "soot-stamp.png";
+    a.download = name;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
@@ -132,8 +69,7 @@ export default function AboutSoot() {
       line-height:1.5; color:${C.ivory}; }
     .about-cite { font-family:'Space Mono',monospace; font-size:11px; color:${C.textDim};
       margin-top:12px; letter-spacing:0.06em; }
-    .about-stamp { display:block; width:min(320px,100%); margin:24px auto 0; border-radius:18px;
-      box-shadow:0 18px 40px rgba(0,0,0,0.45); }
+    .about-stamp { display:block; width:min(320px,100%); margin:24px auto 0; }
     .about-actions { display:flex; gap:18px; justify-content:center; align-items:center;
       margin-top:18px; }
     .about-btn { background:${C.ember}; color:${C.ink}; border:none; border-radius:999px;
@@ -211,8 +147,11 @@ export default function AboutSoot() {
 
         <canvas ref={stampRef} className="about-stamp" aria-label="Soot stamp: a QR code ringed by a waveform" />
         <div className="about-actions">
-          <button className="about-btn" onClick={downloadStamp}>
-            Download the stamp
+          <button className="about-btn" onClick={downloadStamp(INK, "soot-stamp-for-light-paper.png")}>
+            For light paper
+          </button>
+          <button className="about-btn" onClick={downloadStamp(IVORY, "soot-stamp-for-dark-paper.png")}>
+            For dark paper
           </button>
         </div>
         {link && <div className="about-cite" style={{ textAlign: "center" }}>{`scans to ${link}`}</div>}

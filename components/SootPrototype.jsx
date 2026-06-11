@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useRef, useEffect, useCallback } from "react";
-import qrcode from "qrcode-generator";
+import { drawStamp } from "./sootStamp";
 import {
   CODEC,
   LAYOUT,
@@ -392,36 +392,17 @@ async function renderCard({ amps, styleId, caption, durationSec, dateStr, sound,
   ctx.font = "italic 42px 'Instrument Serif', Georgia, serif";
   ctx.fillText("Soot", W / 2, H - 80);
 
-  // QR stamp in the corner — scan to open the decode page. Always a light
-  // sticker with dark modules: inverted QR codes scan unreliably.
+  // the Soot stamp in the corner — scan to open the decode page
   if (link) {
     try {
-      const qr = qrcode(0, "M");
-      qr.addData(link);
-      qr.make();
-      const n = qr.getModuleCount();
-      const cell = 4;
-      const pad = 12;
-      const size = n * cell + pad * 2;
-      const qx = W - 56 - size;
-      const qy = H - 56 - size;
-      ctx.fillStyle = "#F4ECDC";
-      ctx.beginPath();
-      if (ctx.roundRect) ctx.roundRect(qx, qy, size, size, 10);
-      else ctx.rect(qx, qy, size, size);
-      ctx.fill();
-      ctx.fillStyle = "#1B130A";
-      for (let r = 0; r < n; r++) {
-        for (let c = 0; c < n; c++) {
-          if (qr.isDark(r, c)) {
-            ctx.fillRect(qx + pad + c * cell, qy + pad + r * cell, cell, cell);
-          }
-        }
-      }
+      const size = 235;
+      const qx = W - 52 - size;
+      const qy = H - 52 - size;
+      drawStamp(ctx, qx, qy, size, link, { fg: COLORS.ivory });
       ctx.fillStyle = COLORS.textDim;
       ctx.font = "18px 'Space Mono', monospace";
       ctx.textAlign = "center";
-      ctx.fillText("scan to listen", qx + size / 2, qy - 14);
+      ctx.fillText("scan to listen", qx + size / 2, qy - 16);
     } catch (e) {}
   }
 

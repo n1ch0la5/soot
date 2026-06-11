@@ -28,6 +28,74 @@ function makeStampAmps() {
 }
 const STAMP_AMPS = makeStampAmps();
 
+function roundRectPath(ctx, x, y, w, h, r) {
+  if (ctx.roundRect) ctx.roundRect(x, y, w, h, r);
+  else ctx.rect(x, y, w, h);
+}
+
+/* A QR drawn as soot: round dots for data, custom rounded "eyes" in the
+   accent color, and (when the code is big enough) a small knockout in the
+   middle wearing the wordmark — error correction absorbs the hole. */
+export function drawStyledQr(ctx, x, y, size, text, { fg = INK, accent } = {}) {
+  let qr;
+  try {
+    qr = qrcode(0, "M");
+    qr.addData(text);
+    qr.make();
+  } catch (e) {
+    qr = qrcode(0, "L");
+    qr.addData(text);
+    qr.make();
+  }
+  const n = qr.getModuleCount();
+  const cell = size / n;
+  const mid = n / 2;
+  const holeR = n >= 45 ? 4.6 : 0; // modules; ~3% of the code, well under EC
+  const inFinder = (r, c) =>
+    (r < 7 && c < 7) || (r < 7 && c >= n - 7) || (r >= n - 7 && c < 7);
+  const inHole = (r, c) => holeR && Math.hypot(r + 0.5 - mid, c + 0.5 - mid) < holeR;
+
+  ctx.save();
+  ctx.translate(x, y);
+
+  ctx.fillStyle = fg;
+  for (let r = 0; r < n; r++) {
+    for (let c = 0; c < n; c++) {
+      if (!qr.isDark(r, c) || inFinder(r, c) || inHole(r, c)) continue;
+      ctx.beginPath();
+      ctx.arc((c + 0.5) * cell, (r + 0.5) * cell, cell * 0.42, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  const eye = (er, ec) => {
+    const ex = ec * cell;
+    const ey = er * cell;
+    ctx.fillStyle = fg;
+    ctx.beginPath();
+    roundRectPath(ctx, ex, ey, 7 * cell, 7 * cell, 2.4 * cell);
+    roundRectPath(ctx, ex + cell, ey + cell, 5 * cell, 5 * cell, 1.7 * cell);
+    ctx.fill("evenodd");
+    ctx.fillStyle = accent || fg;
+    ctx.beginPath();
+    roundRectPath(ctx, ex + 2 * cell, ey + 2 * cell, 3 * cell, 3 * cell, 1.1 * cell);
+    ctx.fill();
+  };
+  eye(0, 0);
+  eye(0, n - 7);
+  eye(n - 7, 0);
+
+  if (holeR) {
+    ctx.fillStyle = fg;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.font = `italic ${Math.round(holeR * cell * 1.15)}px 'Instrument Serif', Georgia, serif`;
+    ctx.fillText("S", mid * cell, (mid + 0.1) * cell);
+    ctx.textBaseline = "alphabetic";
+  }
+  ctx.restore();
+}
+
 /* A dense data QR on a cream panel: posters get scanned by cameras under
    real-world light, so this one stays dark-on-light for reliability. */
 export function drawQrPanel(ctx, x, y, size, url) {

@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useRef, useEffect, useCallback } from "react";
-import { drawStamp, drawQrPanel } from "./sootStamp";
+import { drawStamp, drawStyledQr } from "./sootStamp";
 import { THEMES, THEME_KEY, loadTheme, hexA } from "./themes";
 import {
   CODEC,
@@ -364,9 +364,11 @@ async function renderCard({ amps, styleId, caption, durationSec, dateStr, sound,
 }
 
 /* ---------- the voice code: a scannable badge for posters & flyers ----------
-   A self-contained square mark, like a QR code but wearing the message's own
-   waveform. The voice is packed inside the QR's URL; stick it on anything. */
+   Transparent, monochrome dark ink — scans anywhere light, and designers
+   can invert it in one step for dark posters. Dot-style QR wearing the
+   message's own waveform; the voice is packed inside the QR's URL. */
 async function renderVoiceCode({ amps, url }) {
+  const INK = "#1B130A";
   try {
     await Promise.all([
       document.fonts.load("italic 44px 'Instrument Serif'"),
@@ -380,34 +382,24 @@ async function renderVoiceCode({ amps, url }) {
   c.height = S;
   const ctx = c.getContext("2d");
 
-  // cream badge so it scans on any background
-  ctx.fillStyle = "#F4ECDC";
-  ctx.beginPath();
-  if (ctx.roundRect) ctx.roundRect(0, 0, S, S, 48);
-  else ctx.rect(0, 0, S, S);
-  ctx.fill();
-
   // the message's own waveform across the top
   ctx.save();
-  ctx.translate(80, 44);
-  ctx.strokeStyle = "#1B130A";
-  ctx.fillStyle = "#1B130A";
+  ctx.translate(70, 28);
+  ctx.strokeStyle = INK;
+  ctx.fillStyle = INK;
   ctx.lineWidth = 3;
   ctx.lineCap = "round";
   ctx.lineJoin = "round";
-  drawStyle(ctx, S - 160, 96, amps, "trace");
+  drawStyle(ctx, S - 140, 104, amps, "trace");
   ctx.restore();
 
   // the recording itself, as a scannable code
-  drawQrPanel(ctx, 100, 160, 600, url);
+  drawStyledQr(ctx, 124, 168, 552, url, { fg: INK });
 
-  ctx.fillStyle = "rgba(27,19,10,0.75)";
+  ctx.fillStyle = hexA(INK, 0.72);
   ctx.textAlign = "center";
-  ctx.font = "italic 44px 'Instrument Serif', Georgia, serif";
-  ctx.fillText("Soot", S / 2, 786 - 38);
-  ctx.fillStyle = "rgba(27,19,10,0.6)";
   ctx.font = "22px 'Space Mono', monospace";
-  ctx.fillText("the voice lives in this code · scan it", S / 2, 786);
+  ctx.fillText("scan to listen · soot", S / 2, 776);
 
   return c;
 }
@@ -770,22 +762,19 @@ export default function SootPrototype() {
     return makeDemoVoice(DEMO_AMPS, DEMO_DUR);
   };
 
+  // waveform art cropped to the kept slice — used by card, badge, everything
+  const getTrimmedAmps = () => {
+    if (!hasRecording || !trimActive) return amps;
+    const a = Math.floor(trim[0] * amps.length);
+    const b = Math.max(a + 2, Math.ceil(trim[1] * amps.length));
+    return resample(amps.slice(a, b), N);
+  };
+
   const buildCard = async () => {
     const samples = await getSamples();
     const sound = encodeVoice(samples);
-    // the card's waveform art shows only the kept slice of the recording
-    const cardAmps =
-      hasRecording && trimActive
-        ? resample(
-            amps.slice(
-              Math.floor(trim[0] * amps.length),
-              Math.max(Math.floor(trim[0] * amps.length) + 2, Math.ceil(trim[1] * amps.length))
-            ),
-            N
-          )
-        : amps;
     return renderCard({
-      amps: cardAmps,
+      amps: getTrimmedAmps(),
       styleId,
       caption,
       durationSec: hasRecording ? trimmedDur : duration,
@@ -1006,18 +995,11 @@ export default function SootPrototype() {
       const samples = await getSamples();
       const payload = await encodeVoiceUrl(samples);
       const url = `${window.location.origin}/#v=${payload}`;
-      const cardAmps =
-        hasRecording && trimActive
-          ? resample(
-              amps.slice(
-                Math.floor(trim[0] * amps.length),
-                Math.max(Math.floor(trim[0] * amps.length) + 2, Math.ceil(trim[1] * amps.length))
-              ),
-              N
-            )
-          : amps;
-      const c = await renderVoiceCode({ amps: cardAmps, url });
+      const c = await renderVoiceCode({ amps: getTrimmedAmps(), url });
       downloadCanvas(c, "soot-voice-code.png");
+      if ((hasRecording ? trimmedDur : duration) > 4) {
+        setNote("tip: shorter sounds make denser codes prettier — try a tighter trim.");
+      }
     } catch (e) {
       setNote("That message is too long for a voice code — trim it shorter.");
     }

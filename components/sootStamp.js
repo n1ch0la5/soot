@@ -28,6 +28,36 @@ function makeStampAmps() {
 }
 const STAMP_AMPS = makeStampAmps();
 
+/* A dense data QR on a cream panel: posters get scanned by cameras under
+   real-world light, so this one stays dark-on-light for reliability. */
+export function drawQrPanel(ctx, x, y, size, url) {
+  let qr;
+  try {
+    qr = qrcode(0, "M");
+    qr.addData(url);
+    qr.make();
+  } catch (e) {
+    qr = qrcode(0, "L"); // overflowed at M: drop to L for capacity
+    qr.addData(url);
+    qr.make();
+  }
+  const n = qr.getModuleCount();
+  const cell = Math.floor((size * 0.88) / n);
+  const inner = cell * n;
+  const pad = Math.floor((size - inner) / 2);
+  ctx.fillStyle = IVORY;
+  ctx.beginPath();
+  if (ctx.roundRect) ctx.roundRect(x, y, size, size, 28);
+  else ctx.rect(x, y, size, size);
+  ctx.fill();
+  ctx.fillStyle = INK;
+  for (let r = 0; r < n; r++) {
+    for (let c = 0; c < n; c++) {
+      if (qr.isDark(r, c)) ctx.fillRect(x + pad + c * cell, y + pad + r * cell, cell, cell);
+    }
+  }
+}
+
 export function drawStamp(ctx, x, y, size, link, { wordmark = false, fg = INK } = {}) {
   const S = 800;
   ctx.save();

@@ -1,3 +1,5 @@
+import { themeStyleText, THEME_INIT_SCRIPT } from "../components/themes";
+
 // Netlify sets URL to the site's primary domain during builds
 const siteUrl = process.env.URL || "http://localhost:3001";
 
@@ -24,8 +26,11 @@ export const metadata = {
 
 export default function RootLayout({ children }) {
   return (
-    <html lang="en">
+    <html lang="en" suppressHydrationWarning>
       <head>
+        {/* set the theme attribute before first paint — prevents the flash */}
+        <script dangerouslySetInnerHTML={{ __html: THEME_INIT_SCRIPT }} />
+        <style dangerouslySetInnerHTML={{ __html: themeStyleText() }} />
         <link rel="preconnect" href="https://fonts.googleapis.com" />
         <link
           rel="preconnect"
@@ -37,7 +42,7 @@ export default function RootLayout({ children }) {
           rel="stylesheet"
         />
       </head>
-      <body style={{ margin: 0, background: "#1E1813" }}>{children}</body>
+      <body style={{ margin: 0 }}>{children}</body>
     </html>
   );
 }

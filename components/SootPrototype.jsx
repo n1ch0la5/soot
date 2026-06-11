@@ -1,11 +1,14 @@
 "use client";
 
 import React, { useState, useRef, useEffect, useCallback } from "react";
-import { drawStamp } from "./sootStamp";
+import { drawStamp, drawQrPanel } from "./sootStamp";
+import { THEMES, THEME_KEY, loadTheme, hexA } from "./themes";
 import {
   CODEC,
   LAYOUT,
   encodeVoice,
+  encodeVoiceUrl,
+  decodeVoiceUrl,
   decodeImage,
   writeSoundBlock,
   blobToSamples,
@@ -28,60 +31,6 @@ const N = 240;
 /* Theme palettes. "ivory" is the foreground/marks color, "ember" the accent.
    The card's sound block (strips + header dots) is NOT themed — it stays
    bright-on-black so every theme's PNG decodes identically. */
-const THEMES = {
-  soot: {
-    label: "Soot",
-    page: "#1E1813",
-    card: "#130F0B",
-    cardEdge: "#2A231B",
-    ivory: "#F4ECDC",
-    ivoryDim: "rgba(244,236,220,0.16)",
-    ember: "#E8A33D",
-    emberSoft: "rgba(232,163,61,0.35)",
-    textDim: "#9C9183",
-  },
-  slate: {
-    label: "Slate",
-    page: "#0F1217",
-    card: "#151A22",
-    cardEdge: "#272F3B",
-    ivory: "#E9EDF4",
-    ivoryDim: "rgba(233,237,244,0.16)",
-    ember: "#7FA8FF",
-    emberSoft: "rgba(127,168,255,0.35)",
-    textDim: "#8C95A4",
-  },
-  orchid: {
-    label: "Orchid",
-    page: "#14101B",
-    card: "#1B1526",
-    cardEdge: "#2F2740",
-    ivory: "#F0EAF8",
-    ivoryDim: "rgba(240,234,248,0.16)",
-    ember: "#B98AFF",
-    emberSoft: "rgba(185,138,255,0.35)",
-    textDim: "#9A8FAE",
-  },
-  paper: {
-    label: "Paper",
-    page: "#EFEAE0",
-    card: "#FAF7F1",
-    cardEdge: "#DCD4C4",
-    ivory: "#2A241C",
-    ivoryDim: "rgba(42,36,28,0.18)",
-    ember: "#C9722A",
-    emberSoft: "rgba(201,114,42,0.30)",
-    textDim: "#8B8270",
-  },
-};
-
-function hexA(hex, a) {
-  const r = parseInt(hex.slice(1, 3), 16);
-  const g = parseInt(hex.slice(3, 5), 16);
-  const b = parseInt(hex.slice(5, 7), 16);
-  return `rgba(${r},${g},${b},${a})`;
-}
-
 const STYLES = [
   { id: "trace", label: "Trace" },
   { id: "ridge", label: "Ridge" },
@@ -414,6 +363,55 @@ async function renderCard({ amps, styleId, caption, durationSec, dateStr, sound,
   return c;
 }
 
+/* ---------- the voice code: a scannable badge for posters & flyers ----------
+   A self-contained square mark, like a QR code but wearing the message's own
+   waveform. The voice is packed inside the QR's URL; stick it on anything. */
+async function renderVoiceCode({ amps, url }) {
+  try {
+    await Promise.all([
+      document.fonts.load("italic 44px 'Instrument Serif'"),
+      document.fonts.load("22px 'Space Mono'"),
+    ]);
+  } catch (e) {}
+
+  const S = 800;
+  const c = document.createElement("canvas");
+  c.width = S;
+  c.height = S;
+  const ctx = c.getContext("2d");
+
+  // cream badge so it scans on any background
+  ctx.fillStyle = "#F4ECDC";
+  ctx.beginPath();
+  if (ctx.roundRect) ctx.roundRect(0, 0, S, S, 48);
+  else ctx.rect(0, 0, S, S);
+  ctx.fill();
+
+  // the message's own waveform across the top
+  ctx.save();
+  ctx.translate(80, 44);
+  ctx.strokeStyle = "#1B130A";
+  ctx.fillStyle = "#1B130A";
+  ctx.lineWidth = 3;
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+  drawStyle(ctx, S - 160, 96, amps, "trace");
+  ctx.restore();
+
+  // the recording itself, as a scannable code
+  drawQrPanel(ctx, 100, 160, 600, url);
+
+  ctx.fillStyle = "rgba(27,19,10,0.75)";
+  ctx.textAlign = "center";
+  ctx.font = "italic 44px 'Instrument Serif', Georgia, serif";
+  ctx.fillText("Soot", S / 2, 786 - 38);
+  ctx.fillStyle = "rgba(27,19,10,0.6)";
+  ctx.font = "22px 'Space Mono', monospace";
+  ctx.fillText("the voice lives in this code · scan it", S / 2, 786);
+
+  return c;
+}
+
 /* ════════════════════════════════════════════════════════════ */
 export default function SootPrototype() {
   const [theme, setTheme] = useState("soot");
@@ -435,6 +433,8 @@ export default function SootPrototype() {
   const [weaving, setWeaving] = useState(false); // encoding voice → image
   const [decoding, setDecoding] = useState(false); // image → voice
   const [sharing, setSharing] = useState(false);
+  const [postering, setPostering] = useState(false);
+  const [linkVoice, setLinkVoice] = useState(false); // voice arrived inside the URL
   const [sentImage, setSentImage] = useState(null); // dataURL of the card PNG
   const [trim, setTrim] = useState([0, 1]); // kept fraction of the recording
 
@@ -476,19 +476,42 @@ export default function SootPrototype() {
     if (new URLSearchParams(window.location.search).has("d")) setView("decode");
   }, []);
 
+  // poster QR scans land on #v=… — the voice is inside the URL itself
   useEffect(() => {
-    try {
-      const t = localStorage.getItem("soot-theme");
-      if (t && THEMES[t]) setTheme(t);
-    } catch (e) {}
+    const h = window.location.hash;
+    if (!h || !h.startsWith("#v=")) return;
+    let cancelled = false;
+    (async () => {
+      setView("decode");
+      setLinkVoice(true);
+      setDecoding(true);
+      try {
+        const dec = await decodeVoiceUrl(h.slice(3));
+        if (!cancelled) decodedRef.current = dec;
+      } catch (e) {
+        if (!cancelled) {
+          setLinkVoice(false);
+          setNote("Couldn't read the voice inside this link.");
+        }
+      }
+      if (!cancelled) setDecoding(false);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    setTheme(loadTheme());
   }, []);
 
   useEffect(() => {
     try {
-      localStorage.setItem("soot-theme", theme);
+      localStorage.setItem(THEME_KEY, theme);
     } catch (e) {}
-    document.body.style.background = COLORS.page;
-  }, [theme, COLORS.page]);
+    // flips the CSS variables defined in the layout's theme stylesheet
+    document.documentElement.setAttribute("data-soot", theme);
+  }, [theme]);
 
   /* ---------- recording ---------- */
   const stopRecording = useCallback(() => {
@@ -797,6 +820,7 @@ export default function SootPrototype() {
       decodedRef.current = null;
       setSentImage(c.toDataURL("image/png"));
       setRevealed(false);
+      setLinkVoice(false);
       setCardOrigin("sent");
       setView("created");
     } catch (e) {
@@ -807,7 +831,7 @@ export default function SootPrototype() {
 
   /* ---------- receive: image → voice ---------- */
   const playReceived = async () => {
-    if (playing || decoding || !sentCanvasRef.current) return;
+    if (playing || decoding || (!sentCanvasRef.current && !decodedRef.current)) return;
     const token = ++playTokenRef.current;
     setNote("");
     if (!decodedRef.current) {
@@ -881,6 +905,7 @@ export default function SootPrototype() {
       setPlaying(false);
       setProgress(0);
       setRevealed(false);
+      setLinkVoice(false);
       setCardOrigin("imported");
       setView("decode");
     };
@@ -963,13 +988,40 @@ export default function SootPrototype() {
   }, []);
 
   /* ---------- PNG download ---------- */
-  const downloadCanvas = (c) => {
+  const downloadCanvas = (c, name = "soot-message.png") => {
     const a = document.createElement("a");
     a.href = c.toDataURL("image/png");
-    a.download = "soot-message.png";
+    a.download = name;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
+  };
+
+  /* ---------- voice code: the voice packed into a scannable badge ---------- */
+  const makeVoiceCode = async () => {
+    if (postering) return;
+    setPostering(true);
+    setNote("");
+    try {
+      const samples = await getSamples();
+      const payload = await encodeVoiceUrl(samples);
+      const url = `${window.location.origin}/#v=${payload}`;
+      const cardAmps =
+        hasRecording && trimActive
+          ? resample(
+              amps.slice(
+                Math.floor(trim[0] * amps.length),
+                Math.max(Math.floor(trim[0] * amps.length) + 2, Math.ceil(trim[1] * amps.length))
+              ),
+              N
+            )
+          : amps;
+      const c = await renderVoiceCode({ amps: cardAmps, url });
+      downloadCanvas(c, "soot-voice-code.png");
+    } catch (e) {
+      setNote("That message is too long for a voice code — trim it shorter.");
+    }
+    setPostering(false);
   };
 
   /* ---------- share: PNG + link into the system share sheet ---------- */
@@ -1030,7 +1082,7 @@ export default function SootPrototype() {
   /* ---------- styles ---------- */
   const css = `
     @import url('https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Hanken+Grotesk:wght@400;500;600&family=Space+Mono&display=swap');
-    .soot-root { min-height: 100vh; background:${COLORS.page}; color:${COLORS.ivory};
+    .soot-root { min-height: 100vh; background:var(--s-page); color:var(--s-fg);
       font-family:'Hanken Grotesk',sans-serif; display:flex; flex-direction:column; align-items:center;
       padding:28px 18px 48px; position:relative; }
     .soot-root::before { content:''; position:fixed; inset:0; background-image:${GRAIN};
@@ -1038,26 +1090,26 @@ export default function SootPrototype() {
     .soot-wrap { width:100%; max-width:420px; }
     .soot-banner { align-self:stretch; margin:-28px -18px 24px; padding:11px 18px;
       text-align:center; font-family:'Space Mono',monospace; font-size:11px;
-      letter-spacing:0.08em; line-height:1.6; color:${COLORS.textDim}; text-decoration:none;
-      background:${hexA(COLORS.card, 0.6)}; border-bottom:1px solid ${COLORS.cardEdge};
+      letter-spacing:0.08em; line-height:1.6; color:var(--s-text-dim); text-decoration:none;
+      background:var(--s-card-veil); border-bottom:1px solid var(--s-edge);
       transition:color .15s; }
-    .soot-banner span { color:${COLORS.ember}; }
-    .soot-banner:hover { color:${COLORS.ivory}; }
+    .soot-banner span { color:var(--s-accent); }
+    .soot-banner:hover { color:var(--s-fg); }
     .soot-mark { font-family:'Instrument Serif',serif; font-style:italic; font-size:30px; }
-    .soot-tag { color:${COLORS.textDim}; font-size:13px; margin-top:2px; letter-spacing:0.04em; }
+    .soot-tag { color:var(--s-text-dim); font-size:13px; margin-top:2px; letter-spacing:0.04em; }
     .soot-themes { display:flex; gap:8px; padding-top:8px; }
     .soot-tabs { display:flex; gap:8px; justify-content:center; margin-top:20px; }
-    .soot-tab { padding:8px 26px; border-radius:999px; border:1px solid ${COLORS.cardEdge};
-      background:transparent; color:${COLORS.textDim}; font-family:inherit; font-size:14px;
+    .soot-tab { padding:8px 26px; border-radius:999px; border:1px solid var(--s-edge);
+      background:transparent; color:var(--s-text-dim); font-family:inherit; font-size:14px;
       font-weight:500; cursor:pointer; transition:color .15s,border-color .15s; }
-    .soot-tab[aria-selected="true"] { color:${COLORS.ivory}; border-color:${COLORS.ember}; }
-    .soot-tab:focus-visible { outline:2px solid ${COLORS.ember}; outline-offset:2px; }
+    .soot-tab[aria-selected="true"] { color:var(--s-fg); border-color:var(--s-accent); }
+    .soot-tab:focus-visible { outline:2px solid var(--s-accent); outline-offset:2px; }
     .soot-swatch { width:22px; height:22px; border-radius:7px; border:1.5px solid; cursor:pointer; padding:0; }
     .soot-swatch[aria-pressed="true"] { transform:scale(1.12); }
-    .soot-swatch:focus-visible { outline:2px solid ${COLORS.ember}; outline-offset:2px; }
+    .soot-swatch:focus-visible { outline:2px solid var(--s-accent); outline-offset:2px; }
     .soot-eyebrow { font-family:'Space Mono',monospace; font-size:11px; letter-spacing:0.22em;
-      text-transform:uppercase; color:${COLORS.textDim}; text-align:center; }
-    .soot-card { margin-top:22px; background:${COLORS.card}; border:1px solid ${COLORS.cardEdge};
+      text-transform:uppercase; color:var(--s-text-dim); text-align:center; }
+    .soot-card { margin-top:22px; background:var(--s-card); border:1px solid var(--s-edge);
       border-radius:18px; padding:26px 18px 18px; position:relative; overflow:hidden;
       box-shadow: inset 0 1px 0 rgba(244,236,220,0.04), 0 18px 40px rgba(0,0,0,0.45);
       transition: box-shadow .4s; }
@@ -1075,41 +1127,41 @@ export default function SootPrototype() {
     .soot-canvas { width:100%; height:190px; display:block; }
     .soot-trimtrack { position:relative; height:28px; margin-top:8px; }
     .soot-trimtrack::before { content:''; position:absolute; left:0; right:0; top:50%;
-      height:2px; margin-top:-1px; background:${COLORS.cardEdge}; border-radius:2px; }
+      height:2px; margin-top:-1px; background:var(--s-edge); border-radius:2px; }
     .soot-trimkeep { position:absolute; top:50%; height:2px; margin-top:-1px;
-      background:${COLORS.ember}; opacity:0.55; border-radius:2px; pointer-events:none; }
+      background:var(--s-accent); opacity:0.55; border-radius:2px; pointer-events:none; }
     .soot-trimhandle { position:absolute; top:2px; bottom:2px; width:20px; margin-left:-10px;
       cursor:ew-resize; touch-action:none; background:none; border:none; padding:0;
       display:flex; align-items:center; justify-content:center; }
     .soot-trimhandle::before { content:''; width:4px; height:100%; border-radius:4px;
-      background:${COLORS.ember}; box-shadow:0 0 10px ${COLORS.emberSoft}; }
-    .soot-trimhandle:focus-visible { outline:2px solid ${COLORS.ember}; outline-offset:2px; }
+      background:var(--s-accent); box-shadow:0 0 10px var(--s-accent-soft); }
+    .soot-trimhandle:focus-visible { outline:2px solid var(--s-accent); outline-offset:2px; }
     .soot-cardimg { width:100%; display:block; }
-    .soot-progressbar { position:absolute; left:0; bottom:0; height:2px; background:${COLORS.ember}; }
+    .soot-progressbar { position:absolute; left:0; bottom:0; height:2px; background:var(--s-accent); }
     .soot-caption { font-family:'Instrument Serif',serif; font-style:italic; font-size:19px;
-      text-align:center; margin-top:14px; min-height:24px; color:${COLORS.ivory}; }
-    .soot-meta { font-family:'Space Mono',monospace; font-size:11px; color:${COLORS.textDim};
+      text-align:center; margin-top:14px; min-height:24px; color:var(--s-fg); }
+    .soot-meta { font-family:'Space Mono',monospace; font-size:11px; color:var(--s-text-dim);
       text-align:center; margin-top:6px; letter-spacing:0.06em; }
     .soot-hint { position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
       font-family:'Space Mono',monospace; font-size:12px; letter-spacing:0.18em;
-      text-transform:uppercase; color:${COLORS.ember}; background:${hexA(COLORS.page, 0.45)};
+      text-transform:uppercase; color:var(--s-accent); background:var(--s-page-veil);
       backdrop-filter: blur(1px); }
-    .soot-hint span { background:${COLORS.page}; border:1px solid ${COLORS.cardEdge};
+    .soot-hint span { background:var(--s-page); border:1px solid var(--s-edge);
       padding:10px 20px; border-radius:999px; box-shadow:0 6px 24px rgba(0,0,0,0.35); }
     .soot-cardbtn { display:block; width:100%; background:none; border:none; padding:0;
       cursor:pointer; font:inherit; color:inherit; text-align:inherit; }
     .soot-chips { display:flex; gap:8px; justify-content:center; margin-top:20px; flex-wrap:wrap; }
-    .soot-chip { background:transparent; border:1px solid ${COLORS.cardEdge}; color:${COLORS.textDim};
+    .soot-chip { background:transparent; border:1px solid var(--s-edge); color:var(--s-text-dim);
       border-radius:999px; padding:7px 16px; font-size:13px; font-weight:500; cursor:pointer;
       font-family:inherit; transition:color .15s,border-color .15s; }
-    .soot-chip[aria-pressed="true"] { color:${COLORS.ivory}; border-color:${COLORS.ember}; }
+    .soot-chip[aria-pressed="true"] { color:var(--s-fg); border-color:var(--s-accent); }
     .soot-chip:focus-visible, .soot-btn:focus-visible, .soot-link:focus-visible,
     .soot-input:focus-visible, .soot-primary:focus-visible, .soot-cardbtn:focus-visible {
-      outline:2px solid ${COLORS.ember}; outline-offset:2px; }
+      outline:2px solid var(--s-accent); outline-offset:2px; }
     .soot-controls { display:flex; flex-direction:column; align-items:center; gap:14px; margin-top:26px; }
     .soot-btn { width:74px; height:74px; border-radius:50%; border:none; cursor:pointer;
       display:flex; align-items:center; justify-content:center;
-      background:${COLORS.ember}; color:#1B130A; transition:transform .12s; }
+      background:var(--s-accent); color:#1B130A; transition:transform .12s; }
     .soot-btn:active { transform:scale(0.94); }
     .soot-btn.rec { background:#C8472E; }
     .soot-btn:disabled { opacity:0.45; cursor:default; }
@@ -1117,25 +1169,25 @@ export default function SootPrototype() {
       .soot-btn.rec { animation: sootPulse 1.4s ease-in-out infinite; }
       @keyframes sootPulse { 0%,100%{ box-shadow:0 0 0 0 rgba(200,71,46,0.45);} 50%{ box-shadow:0 0 0 14px rgba(200,71,46,0);} }
     }
-    .soot-btnlabel { font-size:13px; color:${COLORS.textDim}; letter-spacing:0.04em; }
+    .soot-btnlabel { font-size:13px; color:var(--s-text-dim); letter-spacing:0.04em; }
     .soot-row { display:flex; gap:22px; align-items:center; }
-    .soot-link { background:none; border:none; color:${COLORS.textDim}; font-size:13px;
+    .soot-link { background:none; border:none; color:var(--s-text-dim); font-size:13px;
       cursor:pointer; font-family:inherit; text-decoration:underline; text-underline-offset:3px; }
-    .soot-link:hover { color:${COLORS.ivory}; }
+    .soot-link:hover { color:var(--s-fg); }
     .soot-link:disabled { opacity:.5; cursor:default; }
-    .soot-primary { background:${COLORS.ember}; color:#1B130A; border:none; border-radius:999px;
+    .soot-primary { background:var(--s-accent); color:#1B130A; border:none; border-radius:999px;
       padding:13px 30px; font-size:15px; font-weight:600; font-family:inherit; cursor:pointer;
       transition: transform .12s; }
     .soot-primary:active { transform:scale(.97); }
     .soot-primary:disabled { opacity:.55; cursor:default; }
     .soot-input { margin-top:24px; width:100%; background:transparent; border:none;
-      border-bottom:1px solid ${COLORS.cardEdge}; color:${COLORS.ivory}; text-align:center;
+      border-bottom:1px solid var(--s-edge); color:var(--s-fg); text-align:center;
       font-family:'Instrument Serif',serif; font-style:italic; font-size:17px; padding:8px 4px; }
-    .soot-input::placeholder { color:${COLORS.textDim}; opacity:0.7; }
+    .soot-input::placeholder { color:var(--s-text-dim); opacity:0.7; }
     .soot-send { display:flex; flex-direction:column; align-items:center; gap:12px; margin-top:26px; }
     .soot-actions { display:flex; flex-direction:column; align-items:center; gap:12px; margin-top:26px; }
     .soot-fine { margin-top:10px; font-family:'Space Mono',monospace; font-size:11px;
-      color:${COLORS.textDim}; text-align:center; letter-spacing:0.06em; line-height:1.7; }
+      color:var(--s-text-dim); text-align:center; letter-spacing:0.06em; line-height:1.7; }
     .soot-note { margin-top:14px; font-size:13px; color:#D08B6A; text-align:center; }
     .soot-back { margin-top:34px; text-align:center; }
   `;
@@ -1164,7 +1216,7 @@ export default function SootPrototype() {
               title={t.label}
               style={{
                 background: `linear-gradient(135deg, ${t.page} 50%, ${t.ember} 50%)`,
-                borderColor: theme === id ? COLORS.ember : COLORS.cardEdge,
+                borderColor: theme === id ? "var(--s-accent)" : "var(--s-edge)",
               }}
               onClick={() => setTheme(id)}
             />
@@ -1237,6 +1289,32 @@ export default function SootPrototype() {
                 )}
               </div>
             </button>
+          ) : linkVoice ? (
+            <div className="soot-card arrive" style={{ textAlign: "center", padding: "44px 24px" }}>
+              <div className="soot-eyebrow">
+                {decoding ? "developing the voice…" : "this code carried a voice"}
+              </div>
+              {!decoding && (
+                <div className="soot-actions" style={{ marginTop: 22 }}>
+                  <button className="soot-primary" onClick={playReceived} disabled={playing}>
+                    {playing ? "listening…" : revealed ? "Play it again" : "Play the voice"}
+                  </button>
+                  {revealed && !playing && (
+                    <button className="soot-link" onClick={replyWithVoice}>
+                      reply with your voice
+                    </button>
+                  )}
+                </div>
+              )}
+              {playing && (
+                <div className="soot-progressbar" style={{ width: `${progress * 100}%` }} />
+              )}
+              <div className="soot-fine">
+                no audio file anywhere — the voice was packed
+                <br />
+                into the code you scanned
+              </div>
+            </div>
           ) : (
             <div
               className="soot-card arrive"
@@ -1279,6 +1357,9 @@ export default function SootPrototype() {
               <div className="soot-row">
                 <button className="soot-link" onClick={exportCard} disabled={exporting}>
                   {exporting ? "saving…" : "save the image"}
+                </button>
+                <button className="soot-link" onClick={makeVoiceCode} disabled={postering}>
+                  {postering ? "weaving the code…" : "download a voice code"}
                 </button>
                 <button className="soot-link" onClick={() => switchView("compose")}>
                   back to editing
@@ -1404,8 +1485,8 @@ export default function SootPrototype() {
                   className="soot-btn"
                   style={{
                     background: "transparent",
-                    border: `1.5px solid ${COLORS.ember}`,
-                    color: COLORS.ember,
+                    border: "1.5px solid var(--s-accent)",
+                    color: "var(--s-accent)",
                   }}
                   onClick={startRecording}
                   disabled={playing}

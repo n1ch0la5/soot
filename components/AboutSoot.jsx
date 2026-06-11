@@ -2,18 +2,9 @@
 
 import React, { useEffect, useRef, useState } from "react";
 import { drawStamp, INK, IVORY } from "./sootStamp";
+import { THEMES, loadTheme } from "./themes";
 
-/* The about page keeps the original soot palette regardless of app theme.
-   It's a story about lampblack, after all. */
-const C = {
-  page: "#1E1813",
-  card: "#130F0B",
-  cardEdge: "#2A231B",
-  ivory: "#F4ECDC",
-  ember: "#E8A33D",
-  textDim: "#9C9183",
-  ink: "#1B130A",
-};
+const BTN_TEXT = "#1B130A"; // text on the accent button, dark on every theme
 
 function renderStamp(canvas, link, fg) {
   const S = 800;
@@ -25,16 +16,23 @@ function renderStamp(canvas, link, fg) {
 export default function AboutSoot() {
   const stampRef = useRef(null);
   const [link, setLink] = useState("");
+  const [theme, setTheme] = useState("soot");
+  const C = THEMES[theme];
+
+  useEffect(() => {
+    setTheme(loadTheme());
+  }, []);
 
   useEffect(() => {
     const l = `${window.location.origin}/?d`;
     setLink(l);
-    const draw = () => stampRef.current && renderStamp(stampRef.current, l, IVORY);
+    // preview draws in the theme's mark color so it reads on the page
+    const draw = () => stampRef.current && renderStamp(stampRef.current, l, C.ivory);
     draw();
     try {
       document.fonts.ready.then(draw); // redraw once the serif arrives
     } catch (e) {}
-  }, []);
+  }, [C.ivory]);
 
   // transparent PNG: pick the mark color for the paper it'll live on
   const downloadStamp = (fg, name) => () => {
@@ -49,34 +47,34 @@ export default function AboutSoot() {
   };
 
   const css = `
-    .about-root { min-height:100vh; background:${C.page}; color:${C.ivory};
+    .about-root { min-height:100vh; background:var(--s-page); color:var(--s-fg);
       font-family:'Hanken Grotesk',sans-serif; display:flex; justify-content:center;
       padding:36px 20px 72px; }
     .about-wrap { max-width:560px; width:100%; }
     .about-mark { font-family:'Instrument Serif',serif; font-style:italic; font-size:30px; }
-    .about-back { color:${C.textDim}; font-size:13px; text-decoration:underline;
+    .about-back { color:var(--s-text-dim); font-size:13px; text-decoration:underline;
       text-underline-offset:3px; }
-    .about-back:hover { color:${C.ivory}; }
+    .about-back:hover { color:var(--s-fg); }
     .about-eyebrow { font-family:'Space Mono',monospace; font-size:11px; letter-spacing:0.22em;
-      text-transform:uppercase; color:${C.ember}; margin-top:48px; }
+      text-transform:uppercase; color:var(--s-accent); margin-top:48px; }
     .about-h { font-family:'Instrument Serif',serif; font-style:italic; font-size:34px;
       line-height:1.2; margin:10px 0 0; font-weight:normal; }
-    .about-p { color:${C.textDim}; font-size:16px; line-height:1.75; margin-top:16px; }
-    .about-p strong { color:${C.ivory}; font-weight:500; }
-    .about-card { margin-top:20px; background:${C.card}; border:1px solid ${C.cardEdge};
+    .about-p { color:var(--s-text-dim); font-size:16px; line-height:1.75; margin-top:16px; }
+    .about-p strong { color:var(--s-fg); font-weight:500; }
+    .about-card { margin-top:20px; background:var(--s-card); border:1px solid var(--s-edge);
       border-radius:18px; padding:28px; }
     .about-quote { font-family:'Instrument Serif',serif; font-style:italic; font-size:21px;
-      line-height:1.5; color:${C.ivory}; }
-    .about-cite { font-family:'Space Mono',monospace; font-size:11px; color:${C.textDim};
+      line-height:1.5; color:var(--s-fg); }
+    .about-cite { font-family:'Space Mono',monospace; font-size:11px; color:var(--s-text-dim);
       margin-top:12px; letter-spacing:0.06em; }
     .about-stamp { display:block; width:min(320px,100%); margin:24px auto 0; }
     .about-actions { display:flex; gap:18px; justify-content:center; align-items:center;
       margin-top:18px; }
-    .about-btn { background:${C.ember}; color:${C.ink}; border:none; border-radius:999px;
+    .about-btn { background:var(--s-accent); color:${BTN_TEXT}; border:none; border-radius:999px;
       padding:12px 26px; font-size:15px; font-weight:600; font-family:inherit; cursor:pointer; }
     .about-btn:active { transform:scale(.97); }
     .about-cta { display:block; text-align:center; margin-top:56px; }
-    .about-cta a { color:${C.ember}; font-size:15px; text-decoration:underline;
+    .about-cta a { color:var(--s-accent); font-size:15px; text-decoration:underline;
       text-underline-offset:4px; }
   `;
 

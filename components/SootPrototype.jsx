@@ -23,16 +23,62 @@ import {
 
 const N = 240;
 
-const COLORS = {
-  page: "#1E1813",
-  card: "#130F0B",
-  cardEdge: "#2A231B",
-  ivory: "#F4ECDC",
-  ivoryDim: "rgba(244,236,220,0.16)",
-  ember: "#E8A33D",
-  emberSoft: "rgba(232,163,61,0.35)",
-  textDim: "#9C9183",
+/* Theme palettes. "ivory" is the foreground/marks color, "ember" the accent.
+   The card's sound block (strips + header dots) is NOT themed — it stays
+   bright-on-black so every theme's PNG decodes identically. */
+const THEMES = {
+  soot: {
+    label: "Soot",
+    page: "#1E1813",
+    card: "#130F0B",
+    cardEdge: "#2A231B",
+    ivory: "#F4ECDC",
+    ivoryDim: "rgba(244,236,220,0.16)",
+    ember: "#E8A33D",
+    emberSoft: "rgba(232,163,61,0.35)",
+    textDim: "#9C9183",
+  },
+  slate: {
+    label: "Slate",
+    page: "#0F1217",
+    card: "#151A22",
+    cardEdge: "#272F3B",
+    ivory: "#E9EDF4",
+    ivoryDim: "rgba(233,237,244,0.16)",
+    ember: "#7FA8FF",
+    emberSoft: "rgba(127,168,255,0.35)",
+    textDim: "#8C95A4",
+  },
+  orchid: {
+    label: "Orchid",
+    page: "#14101B",
+    card: "#1B1526",
+    cardEdge: "#2F2740",
+    ivory: "#F0EAF8",
+    ivoryDim: "rgba(240,234,248,0.16)",
+    ember: "#B98AFF",
+    emberSoft: "rgba(185,138,255,0.35)",
+    textDim: "#9A8FAE",
+  },
+  paper: {
+    label: "Paper",
+    page: "#EFEAE0",
+    card: "#FAF7F1",
+    cardEdge: "#DCD4C4",
+    ivory: "#2A241C",
+    ivoryDim: "rgba(42,36,28,0.18)",
+    ember: "#C9722A",
+    emberSoft: "rgba(201,114,42,0.30)",
+    textDim: "#8B8270",
+  },
 };
+
+function hexA(hex, a) {
+  const r = parseInt(hex.slice(1, 3), 16);
+  const g = parseInt(hex.slice(3, 5), 16);
+  const b = parseInt(hex.slice(5, 7), 16);
+  return `rgba(${r},${g},${b},${a})`;
+}
 
 const STYLES = [
   { id: "trace", label: "Trace" },
@@ -152,7 +198,7 @@ function drawStyle(ctx, w, h, amps, styleId) {
   else pathRing(ctx, w, h, amps);
 }
 
-function drawScene(canvas, amps, styleId, progress) {
+function drawScene(canvas, amps, styleId, progress, trim = [0, 1], COLORS = THEMES.soot) {
   const ctx = canvas.getContext("2d");
   const dpr = window.devicePixelRatio || 1;
   const w = canvas.clientWidth,
@@ -216,6 +262,28 @@ function drawScene(canvas, amps, styleId, progress) {
       ctx.shadowBlur = 0;
     }
   }
+
+  // dim the trimmed-away region in the geometry of the current style:
+  // a wedge for the ring (time runs around the circle), side rects otherwise
+  if (trim[0] > 0 || trim[1] < 1) {
+    ctx.save();
+    ctx.beginPath();
+    if (styleId === "ring") {
+      const cx = w / 2,
+        cy = h / 2;
+      const a0 = -Math.PI / 2 + trim[0] * Math.PI * 2;
+      const a1 = -Math.PI / 2 + trim[1] * Math.PI * 2;
+      ctx.moveTo(cx, cy);
+      ctx.arc(cx, cy, Math.max(w, h), a1, a0 + Math.PI * 2);
+      ctx.closePath();
+    } else {
+      ctx.rect(0, 0, w * trim[0], h);
+      ctx.rect(w * trim[1], 0, w * (1 - trim[1]), h);
+    }
+    ctx.fillStyle = hexA(COLORS.card, 0.72);
+    ctx.fill();
+    ctx.restore();
+  }
 }
 
 const GRAIN =
@@ -228,7 +296,8 @@ function fmt(s) {
 }
 
 /* ---------- card renderer: the PNG that carries the voice ---------- */
-async function renderCard({ amps, styleId, caption, durationSec, dateStr, sound }) {
+async function renderCard({ amps, styleId, caption, durationSec, dateStr, sound, palette }) {
+  const COLORS = palette || THEMES.soot;
   try {
     await Promise.all([
       document.fonts.load("italic 60px 'Instrument Serif'"),
@@ -247,8 +316,8 @@ async function renderCard({ amps, styleId, caption, durationSec, dateStr, sound 
   ctx.fillStyle = COLORS.card;
   ctx.fillRect(0, 0, W, H);
   const g = ctx.createRadialGradient(W / 2, H * 0.3, 80, W / 2, H * 0.3, W);
-  g.addColorStop(0, "rgba(244,236,220,0.05)");
-  g.addColorStop(1, "rgba(0,0,0,0.4)");
+  g.addColorStop(0, hexA(COLORS.ivory, 0.04));
+  g.addColorStop(1, hexA(COLORS.page, 0.45));
   ctx.fillStyle = g;
   ctx.fillRect(0, 0, W, H);
 
@@ -316,7 +385,7 @@ async function renderCard({ amps, styleId, caption, durationSec, dateStr, sound 
   ctx.fillText("the voice lives in these marks — decode with soot", W / 2, 1128);
 
   // wordmark
-  ctx.fillStyle = "rgba(244,236,220,0.4)";
+  ctx.fillStyle = hexA(COLORS.ivory, 0.4);
   ctx.font = "italic 42px 'Instrument Serif', Georgia, serif";
   ctx.fillText("Soot", W / 2, H - 80);
 
@@ -330,6 +399,8 @@ async function renderCard({ amps, styleId, caption, durationSec, dateStr, sound 
 
 /* ════════════════════════════════════════════════════════════ */
 export default function SootPrototype() {
+  const [theme, setTheme] = useState("soot");
+  const COLORS = THEMES[theme];
   const [view, setView] = useState("compose"); // compose | received
   const [styleId, setStyleId] = useState("trace");
   const [amps, setAmps] = useState(DEMO_AMPS);
@@ -347,14 +418,15 @@ export default function SootPrototype() {
   const [decoding, setDecoding] = useState(false); // image → voice
   const [sharing, setSharing] = useState(false);
   const [sentImage, setSentImage] = useState(null); // dataURL of the card PNG
+  const [trim, setTrim] = useState([0, 1]); // kept fraction of the recording
 
   const canvasRef = useRef(null);
   const rawAmpsRef = useRef([]);
   const chunksRef = useRef([]);
   const recRef = useRef(null);
-  const audioRef = useRef(null);
-  const recUrlRef = useRef(null);
   const recBlobRef = useRef(null);
+  const recBufRef = useRef(null); // decoded AudioBuffer of the recording
+  const composeCtxRef = useRef(null); // AudioContext playing the recording
   const rafRef = useRef(0);
   const recordingRef = useRef(false);
   const playTokenRef = useRef(0);
@@ -364,12 +436,14 @@ export default function SootPrototype() {
   const fileInputRef = useRef(null);
 
   useEffect(() => {
-    if (canvasRef.current) drawScene(canvasRef.current, amps, styleId, progress);
+    if (canvasRef.current)
+      drawScene(canvasRef.current, amps, styleId, progress, hasRecording ? trim : [0, 1], COLORS);
   });
 
   useEffect(() => {
     const onResize = () => {
-      if (canvasRef.current) drawScene(canvasRef.current, amps, styleId, progress);
+      if (canvasRef.current)
+        drawScene(canvasRef.current, amps, styleId, progress, hasRecording ? trim : [0, 1], COLORS);
     };
     window.addEventListener("resize", onResize);
     return () => window.removeEventListener("resize", onResize);
@@ -384,6 +458,20 @@ export default function SootPrototype() {
     if (new URLSearchParams(window.location.search).has("d")) setView("received");
   }, []);
 
+  useEffect(() => {
+    try {
+      const t = localStorage.getItem("soot-theme");
+      if (t && THEMES[t]) setTheme(t);
+    } catch (e) {}
+  }, []);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem("soot-theme", theme);
+    } catch (e) {}
+    document.body.style.background = COLORS.page;
+  }, [theme, COLORS.page]);
+
   /* ---------- recording ---------- */
   const stopRecording = useCallback(() => {
     recordingRef.current = false;
@@ -395,6 +483,9 @@ export default function SootPrototype() {
   }, []);
 
   const startRecording = async () => {
+    playTokenRef.current++;
+    stopComposeAudio();
+    setPlaying(false);
     setNote("");
     setProgress(0);
     try {
@@ -419,11 +510,11 @@ export default function SootPrototype() {
       rec.ondataavailable = (e) => chunksRef.current.push(e.data);
       rec.onstop = () => {
         const blob = new Blob(chunksRef.current, { type: rec.mimeType });
-        if (recUrlRef.current) URL.revokeObjectURL(recUrlRef.current);
-        recUrlRef.current = URL.createObjectURL(blob);
         recBlobRef.current = blob;
+        recBufRef.current = null;
         stream.getTracks().forEach((t) => t.stop());
         actx.close();
+        setTrim([0, 1]);
         setAmps(resample(rawAmpsRef.current, N));
         setHasRecording(true);
       };
@@ -469,33 +560,64 @@ export default function SootPrototype() {
     rafRef.current = requestAnimationFrame(tick);
   };
 
-  const playRecording = () => {
+  const stopComposeAudio = () => {
+    if (composeCtxRef.current) {
+      try {
+        composeCtxRef.current.close();
+      } catch (e) {}
+      composeCtxRef.current = null;
+    }
+  };
+
+  const playRecording = async () => {
     const token = ++playTokenRef.current;
-    const audio = new Audio(recUrlRef.current);
-    audioRef.current = audio;
-    setPlaying(true);
-    setProgress(0);
-    audio.onended = () => {
-      if (playTokenRef.current === token) {
-        setProgress(1);
-        setPlaying(false);
+    const ACtx = window.AudioContext || window.webkitAudioContext;
+    if (!recBufRef.current) {
+      try {
+        const dctx = new ACtx();
+        recBufRef.current = await dctx.decodeAudioData(await recBlobRef.current.arrayBuffer());
+        dctx.close();
+      } catch (e) {
+        setNote("Couldn't play the recording in this environment.");
+        return;
       }
+      if (playTokenRef.current !== token) return;
+    }
+    const buf = recBufRef.current;
+    const t0 = trim[0] * buf.duration;
+    const dur = Math.max(0.05, (trim[1] - trim[0]) * buf.duration);
+    stopComposeAudio();
+    try {
+      const actx = new ACtx();
+      composeCtxRef.current = actx;
+      const src = actx.createBufferSource();
+      src.buffer = buf;
+      src.connect(actx.destination);
+      src.start(0, t0, dur);
+      src.onended = () => {
+        if (composeCtxRef.current === actx) {
+          composeCtxRef.current = null;
+          try {
+            actx.close();
+          } catch (e) {}
+        }
+      };
+    } catch (e) {
+      setNote("Couldn't play the recording in this environment.");
+      return;
+    }
+    setPlaying(true);
+    setProgress(trim[0]);
+    // sweep the reveal across the kept region only
+    const start = performance.now();
+    const tick = () => {
+      if (playTokenRef.current !== token) return;
+      const p = Math.min(1, (performance.now() - start) / (dur * 1000));
+      setProgress(trim[0] + p * (trim[1] - trim[0]));
+      if (p < 1) rafRef.current = requestAnimationFrame(tick);
+      else setPlaying(false);
     };
-    audio
-      .play()
-      .then(() => {
-        const tick = () => {
-          if (playTokenRef.current !== token) return;
-          if (audio.duration && isFinite(audio.duration)) {
-            setProgress(Math.min(1, audio.currentTime / audio.duration));
-          }
-          if (!audio.ended && !audio.paused) rafRef.current = requestAnimationFrame(tick);
-        };
-        rafRef.current = requestAnimationFrame(tick);
-      })
-      .catch(() => {
-        runProgressClock(duration || 3, token);
-      });
+    rafRef.current = requestAnimationFrame(tick);
   };
 
   const playDemo = () => {
@@ -537,23 +659,73 @@ export default function SootPrototype() {
 
   const handlePlay = () => {
     if (playing || recording) return;
-    if (hasRecording && recUrlRef.current) playRecording();
+    if (hasRecording && recBlobRef.current) playRecording();
     else playDemo();
   };
 
   const resetToDemo = () => {
     playTokenRef.current++;
+    stopComposeAudio();
     setPlaying(false);
     setHasRecording(false);
+    recBlobRef.current = null;
+    recBufRef.current = null;
+    setTrim([0, 1]);
     setAmps(DEMO_AMPS);
     setDuration(DEMO_DUR);
     setProgress(0);
     setElapsed(0);
   };
 
+  /* ---------- trim handles ---------- */
+  const TRIM_GAP = 0.04;
+  const trimActive = hasRecording && (trim[0] > 0 || trim[1] < 1);
+  const trimmedDur = (trim[1] - trim[0]) * duration;
+
+  const onTrimDown = (idx) => (e) => {
+    e.preventDefault();
+    const handle = e.currentTarget;
+    const rect = handle.parentElement.getBoundingClientRect();
+    handle.setPointerCapture(e.pointerId);
+    const move = (ev) => {
+      const t = Math.max(0, Math.min(1, (ev.clientX - rect.left) / rect.width));
+      setTrim((prev) =>
+        idx === 0
+          ? [Math.min(t, prev[1] - TRIM_GAP), prev[1]]
+          : [prev[0], Math.max(t, prev[0] + TRIM_GAP)]
+      );
+    };
+    const up = () => {
+      handle.removeEventListener("pointermove", move);
+      handle.removeEventListener("pointerup", up);
+      handle.removeEventListener("pointercancel", up);
+    };
+    handle.addEventListener("pointermove", move);
+    handle.addEventListener("pointerup", up);
+    handle.addEventListener("pointercancel", up);
+  };
+
+  const onTrimKey = (idx) => (e) => {
+    let d = 0;
+    const step = e.shiftKey ? 0.1 : 0.01;
+    if (e.key === "ArrowLeft") d = -step;
+    else if (e.key === "ArrowRight") d = step;
+    else return;
+    e.preventDefault();
+    setTrim((prev) => {
+      const t = Math.max(0, Math.min(1, prev[idx] + d));
+      return idx === 0
+        ? [Math.min(t, prev[1] - TRIM_GAP), prev[1]]
+        : [prev[0], Math.max(t, prev[0] + TRIM_GAP)];
+    });
+  };
+
   /* ---------- weave: voice → image ---------- */
   const getSamples = async () => {
-    if (hasRecording && recBlobRef.current) return blobToSamples(recBlobRef.current);
+    if (hasRecording && recBlobRef.current) {
+      const s = await blobToSamples(recBlobRef.current);
+      return s.subarray(Math.floor(trim[0] * s.length), Math.ceil(trim[1] * s.length));
+    }
     return makeDemoVoice(DEMO_AMPS, DEMO_DUR);
   };
 
@@ -564,9 +736,10 @@ export default function SootPrototype() {
       amps,
       styleId,
       caption,
-      durationSec: duration,
+      durationSec: hasRecording ? trimmedDur : duration,
       dateStr,
       sound,
+      palette: COLORS,
     });
   };
 
@@ -582,7 +755,7 @@ export default function SootPrototype() {
   const sendIt = async () => {
     if (weaving) return;
     playTokenRef.current++;
-    if (audioRef.current) audioRef.current.pause();
+    stopComposeAudio();
     stopPcm();
     setPlaying(false);
     setProgress(0);
@@ -692,7 +865,7 @@ export default function SootPrototype() {
   /* ---------- navigation ---------- */
   const backToCompose = () => {
     playTokenRef.current++;
-    if (audioRef.current) audioRef.current.pause();
+    stopComposeAudio();
     stopPcm();
     setPlaying(false);
     setProgress(0);
@@ -792,6 +965,10 @@ export default function SootPrototype() {
     .soot-wrap { width:100%; max-width:420px; }
     .soot-mark { font-family:'Instrument Serif',serif; font-style:italic; font-size:30px; }
     .soot-tag { color:${COLORS.textDim}; font-size:13px; margin-top:2px; letter-spacing:0.04em; }
+    .soot-themes { display:flex; gap:8px; padding-top:8px; }
+    .soot-swatch { width:22px; height:22px; border-radius:7px; border:1.5px solid; cursor:pointer; padding:0; }
+    .soot-swatch[aria-pressed="true"] { transform:scale(1.12); }
+    .soot-swatch:focus-visible { outline:2px solid ${COLORS.ember}; outline-offset:2px; }
     .soot-eyebrow { font-family:'Space Mono',monospace; font-size:11px; letter-spacing:0.22em;
       text-transform:uppercase; color:${COLORS.textDim}; text-align:center; }
     .soot-card { margin-top:22px; background:${COLORS.card}; border:1px solid ${COLORS.cardEdge};
@@ -810,6 +987,17 @@ export default function SootPrototype() {
       @keyframes sootHint { 0%,100%{opacity:.55;} 50%{opacity:1;} }
     }
     .soot-canvas { width:100%; height:190px; display:block; }
+    .soot-trimtrack { position:relative; height:28px; margin-top:8px; }
+    .soot-trimtrack::before { content:''; position:absolute; left:0; right:0; top:50%;
+      height:2px; margin-top:-1px; background:${COLORS.cardEdge}; border-radius:2px; }
+    .soot-trimkeep { position:absolute; top:50%; height:2px; margin-top:-1px;
+      background:${COLORS.ember}; opacity:0.55; border-radius:2px; pointer-events:none; }
+    .soot-trimhandle { position:absolute; top:2px; bottom:2px; width:20px; margin-left:-10px;
+      cursor:ew-resize; touch-action:none; background:none; border:none; padding:0;
+      display:flex; align-items:center; justify-content:center; }
+    .soot-trimhandle::before { content:''; width:4px; height:100%; border-radius:4px;
+      background:${COLORS.ember}; box-shadow:0 0 10px ${COLORS.emberSoft}; }
+    .soot-trimhandle:focus-visible { outline:2px solid ${COLORS.ember}; outline-offset:2px; }
     .soot-cardimg { width:100%; display:block; }
     .soot-progressbar { position:absolute; left:0; bottom:0; height:2px; background:${COLORS.ember}; }
     .soot-caption { font-family:'Instrument Serif',serif; font-style:italic; font-size:19px;
@@ -973,16 +1161,72 @@ export default function SootPrototype() {
     <div className="soot-root">
       <style>{css}</style>
       <div className="soot-wrap">
-        <header>
-          <div className="soot-mark">Soot</div>
-          <div className="soot-tag">paper that talks</div>
+        <header style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between" }}>
+          <div>
+            <div className="soot-mark">Soot</div>
+            <div className="soot-tag">paper that talks</div>
+          </div>
+          <div className="soot-themes" role="group" aria-label="Theme">
+            {Object.entries(THEMES).map(([id, t]) => (
+              <button
+                key={id}
+                className="soot-swatch"
+                aria-pressed={theme === id}
+                aria-label={`${t.label} theme`}
+                title={t.label}
+                style={{
+                  background: `linear-gradient(135deg, ${t.page} 50%, ${t.ember} 50%)`,
+                  borderColor: theme === id ? COLORS.ember : COLORS.cardEdge,
+                }}
+                onClick={() => setTheme(id)}
+              />
+            ))}
+          </div>
         </header>
 
         <div className="soot-card">
           <canvas ref={canvasRef} className="soot-canvas" aria-label="Sound wave trace" />
+          {hasRecording && !recording && (
+            <div className="soot-trimtrack">
+              <div
+                className="soot-trimkeep"
+                style={{ left: `${trim[0] * 100}%`, width: `${(trim[1] - trim[0]) * 100}%` }}
+              />
+              <div
+                className="soot-trimhandle"
+                style={{ left: `${trim[0] * 100}%` }}
+                role="slider"
+                tabIndex={0}
+                aria-label="Trim start"
+                aria-orientation="horizontal"
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-valuenow={Math.round(trim[0] * 100)}
+                onPointerDown={onTrimDown(0)}
+                onKeyDown={onTrimKey(0)}
+              />
+              <div
+                className="soot-trimhandle"
+                style={{ left: `${trim[1] * 100}%` }}
+                role="slider"
+                tabIndex={0}
+                aria-label="Trim end"
+                aria-orientation="horizontal"
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-valuenow={Math.round(trim[1] * 100)}
+                onPointerDown={onTrimDown(1)}
+                onKeyDown={onTrimKey(1)}
+              />
+            </div>
+          )}
           <div className="soot-caption">{caption || " "}</div>
           <div className="soot-meta">
-            {recording ? `recording ${fmt(elapsed)}` : `${fmt(duration)} · ${dateStr}`}
+            {recording
+              ? `recording ${fmt(elapsed)}`
+              : hasRecording
+                ? `${trimmedDur.toFixed(1)}s${trimActive ? ` of ${duration.toFixed(1)}s` : ""} · ${dateStr}`
+                : `${fmt(duration)} · ${dateStr}`}
           </div>
         </div>
 
@@ -1035,9 +1279,14 @@ export default function SootPrototype() {
                 {hasRecording ? "play it back · or record again" : "play the demo · or record your own"}
               </div>
               {hasRecording && (
-                <button className="soot-link" onClick={resetToDemo}>
-                  start over with the demo
-                </button>
+                <>
+                  <div className="soot-fine" style={{ marginTop: 0 }}>
+                    drag the amber bars under the trace to trim
+                  </div>
+                  <button className="soot-link" onClick={resetToDemo}>
+                    start over with the demo
+                  </button>
+                </>
               )}
             </>
           ) : (

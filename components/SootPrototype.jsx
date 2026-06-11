@@ -1198,6 +1198,8 @@ export default function SootPrototype() {
       color:var(--s-text-dim); text-align:center; letter-spacing:0.06em; line-height:1.7; }
     .soot-note { margin-top:14px; font-size:13px; color:#D08B6A; text-align:center; }
     .soot-back { margin-top:34px; text-align:center; }
+    .soot-version { margin-top:44px; text-align:center; font-family:'Space Mono',monospace;
+      font-size:10px; letter-spacing:0.08em; color:var(--s-text-dim); opacity:0.55; }
   `;
 
   /* ════════ shared banner + header + tabs ════════ */
@@ -1205,6 +1207,12 @@ export default function SootPrototype() {
     <a className="soot-banner" href="/about">
       in 1860 a voice was drawn in soot. it waited 148 years to be heard <span>· the story</span>
     </a>
+  );
+
+  const versionStamp = (
+    <div className="soot-version">
+      v{process.env.NEXT_PUBLIC_VERSION} · {process.env.NEXT_PUBLIC_BUILT}
+    </div>
   );
 
   const headerAndTabs = (
@@ -1406,6 +1414,7 @@ export default function SootPrototype() {
           )}
 
           {note && <div className="soot-note">{note}</div>}
+          {versionStamp}
         </div>
         <input
           ref={fileInputRef}
@@ -1575,6 +1584,7 @@ export default function SootPrototype() {
         )}
 
         {note && <div className="soot-note">{note}</div>}
+        {versionStamp}
       </div>
       <input
         ref={fileInputRef}

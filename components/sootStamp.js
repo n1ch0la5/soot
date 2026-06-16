@@ -28,15 +28,19 @@ function makeStampAmps() {
 }
 const STAMP_AMPS = makeStampAmps();
 
-/* Save a canvas as PNG. On mobile this goes through the share sheet (the
-   only web route into the Photos app — "Save Image" lives there); desktop
-   falls back to a regular download. */
+/* Save a canvas as PNG. On touch devices this goes through the share sheet
+   (the only web route into the Photos app — "Save Image" lives there);
+   laptops/desktops get a straight file download, even where the browser
+   technically supports sharing. iPadOS masquerades as Mac, hence the
+   maxTouchPoints check. */
 export async function saveCanvasPng(canvas, name) {
   const blob = await new Promise((res, rej) =>
     canvas.toBlob((b) => (b ? res(b) : rej(new Error("toBlob failed"))), "image/png")
   );
   const file = new File([blob], name, { type: "image/png" });
-  if (navigator.canShare && navigator.canShare({ files: [file] })) {
+  const isTouch =
+    /Android|iPhone|iPad|iPod/i.test(navigator.userAgent) || navigator.maxTouchPoints > 1;
+  if (isTouch && navigator.canShare && navigator.canShare({ files: [file] })) {
     try {
       await navigator.share({ files: [file] });
       return;

@@ -1,13 +1,14 @@
 {
   "name": "soot",
-  "version": "0.3.5",
+  "version": "0.3.6",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "next dev -p 3001",
     "build": "next build",
     "start": "npx -y serve out -l 3001",
-    "test": "node tests/codec.test.mjs"
+    "test": "node tests/codec.test.mjs",
+    "robustness": "node tests/printRobustness.mjs"
   },
   "dependencies": {
     "next": "^15.3.3",

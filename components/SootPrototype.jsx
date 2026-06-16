@@ -1170,6 +1170,11 @@ export default function SootPrototype() {
       transition: transform .12s; }
     .soot-primary:active { transform:scale(.97); }
     .soot-primary:disabled { opacity:.55; cursor:default; }
+    .soot-secondary { background:transparent; color:var(--s-fg); border:1px solid var(--s-accent);
+      border-radius:999px; padding:11px 26px; font-size:14px; font-weight:600; font-family:inherit;
+      cursor:pointer; transition: transform .12s; }
+    .soot-secondary:active { transform:scale(.97); }
+    .soot-secondary:disabled { opacity:.55; cursor:default; }
     .soot-input { margin-top:24px; width:100%; background:transparent; border:none;
       border-bottom:1px solid var(--s-edge); color:var(--s-fg); text-align:center;
       font-family:'Instrument Serif',serif; font-style:italic; font-size:17px; padding:8px 4px; }
@@ -1362,12 +1367,17 @@ export default function SootPrototype() {
               <button className="soot-primary" onClick={shareIt} disabled={sharing}>
                 {sharing ? "opening share…" : "Text it to someone"}
               </button>
+              <button className="soot-secondary" onClick={makeVoiceCode} disabled={postering}>
+                {postering ? "weaving the code…" : "Make a scan-to-hear code"}
+              </button>
+              <div className="soot-fine">
+                a code for posters, cards & gifts — anyone scans it
+                <br />
+                to hear you, no app and no upload
+              </div>
               <div className="soot-row">
                 <button className="soot-link" onClick={exportCard} disabled={exporting}>
                   {exporting ? "saving…" : "save the image"}
-                </button>
-                <button className="soot-link" onClick={makeVoiceCode} disabled={postering}>
-                  {postering ? "weaving the code…" : "download a voice code"}
                 </button>
                 <button className="soot-link" onClick={() => switchView("compose")}>
                   back to editing
